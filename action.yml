@@ -1,4 +1,4 @@
-name: 'Pacto'
+name: 'Pacto CLI'
 description: 'Setup, diff, and push Pacto contracts in your GitHub Actions workflows'
 author: 'TrianaLab'
 
