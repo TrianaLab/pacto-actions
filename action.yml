@@ -1,0 +1,263 @@
+name: 'Pacto'
+description: 'Setup, diff, and push Pacto contracts in your GitHub Actions workflows'
+author: 'TrianaLab'
+
+branding:
+  icon: 'feather'
+  color: 'blue'
+
+inputs:
+  command:
+    description: 'Command to run: "setup", "diff", or "push"'
+    required: true
+  # setup inputs
+  version:
+    description: '[setup] Pacto version to install (e.g., v0.2.1)'
+    required: false
+    default: 'latest'
+  github-token:
+    description: '[setup] GitHub token for querying the Pacto releases API to avoid rate limiting'
+    required: false
+    default: ${{ github.token }}
+  # diff inputs
+  old:
+    description: '[diff] Baseline contract: directory path or oci:// reference'
+    required: false
+  new:
+    description: '[diff] Updated contract: directory path or oci:// reference'
+    required: false
+  output-format:
+    description: '[diff] Output format: "text" or "json"'
+    required: false
+    default: 'text'
+  fail-on-breaking:
+    description: '[diff] Fail the action if breaking changes are detected'
+    required: false
+    default: 'true'
+  # push inputs
+  ref:
+    description: '[push] OCI reference (e.g., ghcr.io/org/name:tag)'
+    required: false
+  path:
+    description: '[push] Path to the contract directory containing pacto.yaml'
+    required: false
+    default: '.'
+  registry:
+    description: '[push] Registry hostname for authentication (e.g., ghcr.io)'
+    required: false
+  username:
+    description: '[push] Registry username for authentication'
+    required: false
+  password:
+    description: '[push] Registry password or token for authentication'
+    required: false
+
+outputs:
+  version:
+    description: '[setup] The exact version of Pacto that was installed'
+    value: ${{ steps.setup.outputs.version }}
+  has-breaking-changes:
+    description: '[diff] Whether breaking changes were detected ("true" or "false")'
+    value: ${{ steps.diff.outputs.has-breaking-changes }}
+  diff-output:
+    description: '[diff] The full diff output'
+    value: ${{ steps.diff.outputs.diff-output }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate command
+      shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+      run: |
+        case "${COMMAND}" in
+          setup|diff|push) ;;
+          *)
+            echo "::error::Invalid command '${COMMAND}'. Must be one of: setup, diff, push"
+            exit 1
+            ;;
+        esac
+
+    # ── Setup ──────────────────────────────────────────────
+    - name: Install Pacto
+      if: inputs.command == 'setup'
+      id: setup
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        # Resolve version
+        if [ "${VERSION}" = "latest" ]; then
+          VERSION=$(gh api repos/TrianaLab/pacto/releases/latest --jq '.tag_name')
+          echo "Resolved latest version: ${VERSION}"
+        fi
+
+        # Ensure version starts with 'v'
+        if [[ "${VERSION}" != v* ]]; then
+          VERSION="v${VERSION}"
+        fi
+
+        # Map runner OS to Pacto binary OS name
+        case "${{ runner.os }}" in
+          Linux)   OS="linux" ;;
+          macOS)   OS="darwin" ;;
+          Windows) OS="windows" ;;
+          *)
+            echo "::error::Unsupported OS: ${{ runner.os }}"
+            exit 1
+            ;;
+        esac
+
+        # Map runner arch to Pacto binary arch name
+        case "${{ runner.arch }}" in
+          X64)   ARCH="amd64" ;;
+          ARM64) ARCH="arm64" ;;
+          *)
+            echo "::error::Unsupported architecture: ${{ runner.arch }}"
+            exit 1
+            ;;
+        esac
+
+        # Construct binary name and download URL
+        BINARY="pacto_${OS}_${ARCH}"
+        if [ "${OS}" = "windows" ]; then
+          BINARY="${BINARY}.exe"
+        fi
+        DOWNLOAD_URL="https://github.com/TrianaLab/pacto/releases/download/${VERSION}/${BINARY}"
+
+        # Download binary
+        INSTALL_DIR="${RUNNER_TEMP}/pacto"
+        mkdir -p "${INSTALL_DIR}"
+        TARGET="${INSTALL_DIR}/pacto"
+        if [ "${OS}" = "windows" ]; then
+          TARGET="${TARGET}.exe"
+        fi
+
+        echo "Downloading Pacto ${VERSION} (${OS}/${ARCH})..."
+        curl -fsSL "${DOWNLOAD_URL}" -o "${TARGET}"
+
+        if [ "${OS}" != "windows" ]; then
+          chmod +x "${TARGET}"
+        fi
+
+        # Add to PATH
+        echo "${INSTALL_DIR}" >> "${GITHUB_PATH}"
+
+        # Outputs
+        echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+        echo "Pacto ${VERSION} installed successfully"
+
+    - name: Verify installation
+      if: inputs.command == 'setup'
+      shell: bash
+      run: pacto version
+
+    # ── Diff ───────────────────────────────────────────────
+    - name: Validate diff inputs
+      if: inputs.command == 'diff'
+      shell: bash
+      env:
+        OLD_REF: ${{ inputs.old }}
+        NEW_REF: ${{ inputs.new }}
+      run: |
+        if [ -z "${OLD_REF}" ] || [ -z "${NEW_REF}" ]; then
+          echo "::error::Both 'old' and 'new' inputs are required for the diff command"
+          exit 1
+        fi
+
+    - name: Run pacto diff
+      if: inputs.command == 'diff'
+      id: diff
+      shell: bash
+      env:
+        OLD_REF: ${{ inputs.old }}
+        NEW_REF: ${{ inputs.new }}
+        OUTPUT_FORMAT: ${{ inputs.output-format }}
+        FAIL_ON_BREAKING: ${{ inputs.fail-on-breaking }}
+      run: |
+        set +e
+        OUTPUT=$(pacto diff "${OLD_REF}" "${NEW_REF}" --output-format "${OUTPUT_FORMAT}" 2>&1)
+        EXIT_CODE=$?
+        set -e
+
+        # Set outputs using heredoc delimiter for multiline safety
+        {
+          echo "diff-output<<PACTO_DIFF_EOF"
+          echo "${OUTPUT}"
+          echo "PACTO_DIFF_EOF"
+        } >> "${GITHUB_OUTPUT}"
+
+        # Write to step summary
+        {
+          echo "## Pacto Diff Results"
+          echo ""
+          echo '```'
+          echo "${OUTPUT}"
+          echo '```'
+        } >> "${GITHUB_STEP_SUMMARY}"
+
+        echo "${OUTPUT}"
+
+        if [ ${EXIT_CODE} -ne 0 ]; then
+          echo "has-breaking-changes=true" >> "${GITHUB_OUTPUT}"
+          if [ "${FAIL_ON_BREAKING}" = "true" ]; then
+            echo "::error::Breaking changes detected between contracts"
+            exit 1
+          fi
+          echo "::warning::Breaking changes detected between contracts"
+        else
+          echo "has-breaking-changes=false" >> "${GITHUB_OUTPUT}"
+        fi
+
+    # ── Push ───────────────────────────────────────────────
+    - name: Validate push inputs
+      if: inputs.command == 'push'
+      shell: bash
+      env:
+        REF: ${{ inputs.ref }}
+        REGISTRY: ${{ inputs.registry }}
+        USERNAME: ${{ inputs.username }}
+        PASSWORD: ${{ inputs.password }}
+      run: |
+        if [ -z "${REF}" ]; then
+          echo "::error::The 'ref' input is required for the push command"
+          exit 1
+        fi
+
+        # Validate that auth inputs are either all provided or all omitted
+        AUTH_COUNT=0
+        [ -n "${REGISTRY}" ] && AUTH_COUNT=$((AUTH_COUNT + 1))
+        [ -n "${USERNAME}" ] && AUTH_COUNT=$((AUTH_COUNT + 1))
+        [ -n "${PASSWORD}" ] && AUTH_COUNT=$((AUTH_COUNT + 1))
+        if [ "${AUTH_COUNT}" -ne 0 ] && [ "${AUTH_COUNT}" -ne 3 ]; then
+          echo "::error::All three inputs (registry, username, password) must be provided together for authentication"
+          exit 1
+        fi
+
+    - name: Authenticate with registry
+      if: inputs.command == 'push' && inputs.registry != '' && inputs.username != '' && inputs.password != ''
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        USERNAME: ${{ inputs.username }}
+        PASSWORD: ${{ inputs.password }}
+      run: |
+        set -euo pipefail
+        echo "::add-mask::${PASSWORD}"
+        pacto login "${REGISTRY}" -u "${USERNAME}" -p "${PASSWORD}"
+
+    - name: Push contract
+      if: inputs.command == 'push'
+      shell: bash
+      env:
+        REF: ${{ inputs.ref }}
+        CONTRACT_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        echo "Pushing contract to ${REF}..."
+        pacto push "${REF}" -p "${CONTRACT_PATH}"
+        echo "Contract pushed successfully to ${REF}"
