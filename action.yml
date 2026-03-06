@@ -16,7 +16,7 @@ inputs:
     required: false
     default: 'latest'
   github-token:
-    description: '[setup] GitHub token for querying the Pacto releases API to avoid rate limiting'
+    description: '[setup/doc] GitHub token for API requests (setup: releases API, doc: PR comments)'
     required: false
     default: ${{ github.token }}
   # diff inputs
@@ -39,7 +39,7 @@ inputs:
     description: '[push] OCI reference (e.g., ghcr.io/org/name:tag)'
     required: false
   path:
-    description: '[push] Path to the contract directory containing pacto.yaml'
+    description: '[push/doc] Path to the contract directory or oci:// reference'
     required: false
     default: '.'
   registry:
