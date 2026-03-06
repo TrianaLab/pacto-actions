@@ -2,6 +2,17 @@
 
 GitHub Action for the [Pacto](https://trianalab.github.io/pacto/) CLI — an OCI-distributed contract standard for cloud-native services.
 
+## Table of Contents
+
+- [Commands](#commands)
+- [Setup](#setup)
+- [Diff](#diff)
+- [Doc](#doc)
+- [Push](#push)
+  - [Authentication](#authentication)
+- [Full CI/CD Example](#full-cicd-example)
+- [License](#license)
+
 ## Commands
 
 | Command | Description |
@@ -9,6 +20,7 @@ GitHub Action for the [Pacto](https://trianalab.github.io/pacto/) CLI — an OCI
 | `setup` | Install the Pacto CLI |
 | `diff` | Compare contracts and detect breaking changes |
 | `push` | Push contracts to an OCI registry |
+| `doc` | Generate markdown documentation from contracts |
 
 ## Setup
 
@@ -42,8 +54,8 @@ Compares two contracts and classifies changes as non-breaking or potentially bre
 - uses: trianalab/pacto-actions@v1
   with:
     command: diff
-    old: ./contracts/v1
-    new: ./contracts/v2
+    old: ./pactos/v1
+    new: ./pactos/v2
 ```
 
 ### Inputs
@@ -64,6 +76,65 @@ Compares two contracts and classifies changes as non-breaking or potentially bre
 | `has-breaking-changes` | `true` if breaking changes were detected |
 | `diff-output` | The full diff output |
 
+## Doc
+
+Generates markdown documentation from contracts.
+
+```yaml
+- uses: trianalab/pacto-actions@v1
+  with:
+    command: doc
+    path: ./pactos/my-service
+```
+
+### Inputs
+
+| Name | Description | Required | Default |
+|------|-------------|----------|---------|
+| `path` | Contract source: directory path or `oci://` reference | No | `.` |
+| `output-path` | File path to save the generated markdown | No | — |
+| `comment-on-pr` | Post the documentation as a PR comment | No | `false` |
+| `add-to-summary` | Add the documentation to the GitHub Step Summary | No | `true` |
+
+### Outputs
+
+| Name | Description |
+|------|-------------|
+| `doc-output` | The generated markdown documentation |
+
+### Examples
+
+**Save documentation to a file:**
+
+```yaml
+- uses: trianalab/pacto-actions@v1
+  with:
+    command: doc
+    path: ./pactos/my-service
+    output-path: ./docs/contract-api.md
+```
+
+**Post documentation as a PR comment:**
+
+```yaml
+- uses: trianalab/pacto-actions@v1
+  with:
+    command: doc
+    path: ./pactos/my-service
+    comment-on-pr: 'true'
+```
+
+> **Note:** The `comment-on-pr` option requires `pull-requests: write` permission for the `GITHUB_TOKEN`. The comment is idempotent — re-runs update the existing comment instead of creating duplicates.
+
+**Generate documentation from an OCI reference:**
+
+```yaml
+- uses: trianalab/pacto-actions@v1
+  with:
+    command: doc
+    path: oci://ghcr.io/my-org/my-service:v1.0.0
+```
+
 ## Push
 
 Pushes validated contracts to an OCI registry.
@@ -73,7 +144,7 @@ Pushes validated contracts to an OCI registry.
   with:
     command: push
     ref: ghcr.io/my-org/my-service:v1.0.0
-    path: ./contracts/my-service
+    path: ./pactos/my-service
 ```
 
 ### Inputs
@@ -94,7 +165,7 @@ Your workflow (or job) **must** declare `packages: write` permission for the `GI
 
 ```yaml
 jobs:
-  push-contracts:
+  push-pactos:
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -105,7 +176,7 @@ jobs:
         with:
           command: push
           ref: ghcr.io/my-org/my-service:v1.0.0
-          path: ./contracts/my-service
+          path: ./pactos/my-service
 ```
 
 Pacto detects GHCR credentials from the `GH_TOKEN` environment variable via the GitHub CLI. This works when the `GITHUB_TOKEN` has the `write:packages` scope.
@@ -151,15 +222,16 @@ name: Pacto CI
 on:
   push:
     branches: [main]
-    paths: ['contracts/**']
+    paths: ['pactos/**']
   pull_request:
-    paths: ['contracts/**']
+    paths: ['pactos/**']
 
 permissions:
-  packages: write  # required for GHCR push
+  packages: write       # required for GHCR push
+  pull-requests: write  # required for doc PR comments
 
 jobs:
-  contracts:
+  pactos:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -173,7 +245,7 @@ jobs:
       - name: Extract contract version
         id: contract
         run: |
-          VERSION=$(grep '^version:' ./contracts/my-service/pacto.yaml | awk '{print $2}')
+          VERSION=$(grep '^version:' ./pactos/my-service/pacto.yaml | awk '{print $2}')
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       # Compare against the currently published contract
@@ -181,7 +253,15 @@ jobs:
         with:
           command: diff
           old: oci://ghcr.io/my-org/my-service:latest
-          new: ./contracts/my-service
+          new: ./pactos/my-service
+
+      # Post contract docs as a PR comment
+      - uses: trianalab/pacto-actions@v1
+        if: github.event_name == 'pull_request'
+        with:
+          command: doc
+          path: ./pactos/my-service
+          comment-on-pr: 'true'
 
       # Push on merge to main
       - uses: trianalab/pacto-actions@v1
@@ -191,13 +271,13 @@ jobs:
         with:
           command: push
           ref: ghcr.io/my-org/my-service:${{ steps.contract.outputs.version }}
-          path: ./contracts/my-service
+          path: ./pactos/my-service
 ```
 
 ### Notes on this example
 
-- **`permissions: packages: write`** is required at the workflow or job level for the `GITHUB_TOKEN` to push to GHCR. Without it, pushes fail regardless of authentication method.
-- **Version extraction** reads the `version` field from `pacto.yaml` so the OCI tag matches the contract version. Adjust the `grep`/`awk` command to match your `pacto.yaml` structure, or use [`yq`](https://github.com/mikefarah/yq) for more robust YAML parsing: `yq '.version' ./contracts/my-service/pacto.yaml`.
+- **`permissions: packages: write`** is required at the workflow or job level for the `GITHUB_TOKEN` to push to GHCR. Without it, pushes fail regardless of authentication method. **`pull-requests: write`** is needed for the `doc` command's `comment-on-pr` feature.
+- **Version extraction** reads the `version` field from `pacto.yaml` so the OCI tag matches the contract version. Adjust the `grep`/`awk` command to match your `pacto.yaml` structure, or use [`yq`](https://github.com/mikefarah/yq) for more robust YAML parsing: `yq '.version' ./pactos/my-service/pacto.yaml`.
 - **`oci://` prefix** is used in `diff` to reference remote contracts. The `push` command takes bare registry refs without the `oci://` prefix.
 - **First-time GHCR push:** If the package does not exist yet, the first push creates it. If a package already exists and was created by a different token, see the [GHCR troubleshooting section](#github-container-registry-ghcr) above.
 

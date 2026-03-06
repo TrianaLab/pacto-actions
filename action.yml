@@ -1,5 +1,5 @@
 name: 'Pacto CLI'
-description: 'Setup, diff, and push Pacto contracts in your GitHub Actions workflows'
+description: 'Setup, diff, push, and generate documentation for Pacto contracts in your GitHub Actions workflows'
 author: 'TrianaLab'
 
 branding:
@@ -8,7 +8,7 @@ branding:
 
 inputs:
   command:
-    description: 'Command to run: "setup", "diff", or "push"'
+    description: 'Command to run: "setup", "diff", "push", or "doc"'
     required: true
   # setup inputs
   version:
@@ -51,6 +51,18 @@ inputs:
   password:
     description: '[push] Registry password or token for authentication'
     required: false
+  # doc inputs
+  output-path:
+    description: '[doc] File path to save the generated markdown documentation'
+    required: false
+  comment-on-pr:
+    description: '[doc] Post the documentation as a PR comment'
+    required: false
+    default: 'false'
+  add-to-summary:
+    description: '[doc] Add the documentation to the GitHub Step Summary'
+    required: false
+    default: 'true'
 
 outputs:
   version:
@@ -62,6 +74,9 @@ outputs:
   diff-output:
     description: '[diff] The full diff output'
     value: ${{ steps.diff.outputs.diff-output }}
+  doc-output:
+    description: '[doc] The generated markdown documentation'
+    value: ${{ steps.doc.outputs.doc-output }}
 
 runs:
   using: 'composite'
@@ -72,9 +87,9 @@ runs:
         COMMAND: ${{ inputs.command }}
       run: |
         case "${COMMAND}" in
-          setup|diff|push) ;;
+          setup|diff|push|doc) ;;
           *)
-            echo "::error::Invalid command '${COMMAND}'. Must be one of: setup, diff, push"
+            echo "::error::Invalid command '${COMMAND}'. Must be one of: setup, diff, push, doc"
             exit 1
             ;;
         esac
@@ -261,3 +276,99 @@ runs:
         echo "Pushing contract to ${REF}..."
         pacto push "${REF}" -p "${CONTRACT_PATH}"
         echo "Contract pushed successfully to ${REF}"
+
+    # ── Doc ────────────────────────────────────────────────
+    - name: Generate documentation
+      if: inputs.command == 'doc'
+      id: doc
+      shell: bash
+      env:
+        CONTRACT_PATH: ${{ inputs.path }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+        ADD_TO_SUMMARY: ${{ inputs.add-to-summary }}
+      run: |
+        set -euo pipefail
+
+        OUTPUT=$(pacto doc "${CONTRACT_PATH}")
+
+        # Set output using heredoc delimiter for multiline safety
+        {
+          echo "doc-output<<PACTO_DOC_EOF"
+          echo "${OUTPUT}"
+          echo "PACTO_DOC_EOF"
+        } >> "${GITHUB_OUTPUT}"
+
+        # Write to file if output-path is set
+        if [ -n "${OUTPUT_PATH}" ]; then
+          mkdir -p "$(dirname "${OUTPUT_PATH}")"
+          echo "${OUTPUT}" > "${OUTPUT_PATH}"
+          echo "Documentation written to ${OUTPUT_PATH}"
+        fi
+
+        # Write to step summary if enabled
+        if [ "${ADD_TO_SUMMARY}" = "true" ]; then
+          echo "${OUTPUT}" >> "${GITHUB_STEP_SUMMARY}"
+        fi
+
+        echo "${OUTPUT}"
+
+    - name: Comment documentation on PR
+      if: inputs.command == 'doc' && inputs.comment-on-pr == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        DOC_OUTPUT: ${{ steps.doc.outputs.doc-output }}
+      run: |
+        set -euo pipefail
+
+        # Determine PR number
+        if [ "${EVENT_NAME}" = "pull_request" ] || [ "${EVENT_NAME}" = "pull_request_target" ]; then
+          RESOLVED_PR="${PR_NUMBER}"
+        else
+          echo "::warning::comment-on-pr is enabled but this is not a pull request event (event: ${EVENT_NAME}). Skipping comment."
+          exit 0
+        fi
+
+        if [ -z "${RESOLVED_PR}" ]; then
+          echo "::warning::Could not determine pull request number. Skipping comment."
+          exit 0
+        fi
+
+        MARKER="<!-- pacto-doc-comment -->"
+
+        # Write body to temp file for safe multiline handling
+        BODY_FILE=$(mktemp)
+        {
+          echo "${MARKER}"
+          echo "## Pacto Contract Documentation"
+          echo ""
+          echo "${DOC_OUTPUT}"
+        } > "${BODY_FILE}"
+
+        # Search for existing comment with marker
+        EXISTING_COMMENT_ID=$(gh api \
+          --paginate \
+          "repos/${REPO}/issues/${RESOLVED_PR}/comments" \
+          --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" \
+          | head -1)
+
+        if [ -n "${EXISTING_COMMENT_ID}" ]; then
+          # Update existing comment
+          gh api \
+            --method PATCH \
+            "repos/${REPO}/issues/comments/${EXISTING_COMMENT_ID}" \
+            -F body=@"${BODY_FILE}"
+          echo "Updated existing PR comment (id: ${EXISTING_COMMENT_ID})"
+        else
+          # Create new comment
+          gh api \
+            --method POST \
+            "repos/${REPO}/issues/${RESOLVED_PR}/comments" \
+            -F body=@"${BODY_FILE}"
+          echo "Created new PR comment"
+        fi
+
+        rm -f "${BODY_FILE}"
