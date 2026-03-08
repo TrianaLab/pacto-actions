@@ -68,7 +68,7 @@ Compares two contracts and classifies changes as non-breaking or potentially bre
 | `output-format` | Output format: `text` or `json` | No | `text` |
 | `fail-on-breaking` | Fail the action if breaking changes are detected | No | `true` |
 
-> **Note on `oci://` prefix:** The `diff` command accepts `oci://` prefixed references for remote contracts (e.g., `oci://ghcr.io/my-org/my-service:v1.0.0`). The `push` command does **not** use this prefix — provide bare registry references instead (e.g., `ghcr.io/my-org/my-service:v1.0.0`).
+> **`oci://` prefix:** All commands that accept OCI references use the `oci://` prefix consistently (e.g., `oci://ghcr.io/my-org/my-service:v1.0.0`). This applies to `diff`, `push`, `doc`, and any other command that references remote contracts.
 
 ### Outputs
 
@@ -148,7 +148,7 @@ Pushes validated contracts to an OCI registry.
 - uses: trianalab/pacto-actions@v1
   with:
     command: push
-    ref: ghcr.io/my-org/my-service:v1.0.0
+    ref: oci://ghcr.io/my-org/my-service:v1.0.0
     path: ./pactos/my-service
 ```
 
@@ -156,7 +156,7 @@ Pushes validated contracts to an OCI registry.
 
 | Name | Description | Required | Default |
 |------|-------------|----------|---------|
-| `ref` | OCI reference (e.g., `ghcr.io/org/name:tag`) | Yes | — |
+| `ref` | OCI reference (e.g., `oci://ghcr.io/org/name:tag`) | Yes | — |
 | `path` | Path to contract directory | No | `.` |
 | `registry` | Registry hostname for authentication | No | — |
 | `username` | Registry username | No | — |
@@ -180,7 +180,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: push
-          ref: ghcr.io/my-org/my-service:v1.0.0
+          ref: oci://ghcr.io/my-org/my-service:v1.0.0
           path: ./pactos/my-service
 ```
 
@@ -198,7 +198,7 @@ If auto-detection does not work for your setup, you can also authenticate explic
 - uses: trianalab/pacto-actions@v1
   with:
     command: push
-    ref: ghcr.io/my-org/my-service:v1.0.0
+    ref: oci://ghcr.io/my-org/my-service:v1.0.0
     registry: ghcr.io
     username: ${{ github.actor }}
     password: ${{ secrets.GITHUB_TOKEN }}
@@ -212,7 +212,7 @@ For non-GHCR registries, provide credentials explicitly:
 - uses: trianalab/pacto-actions@v1
   with:
     command: push
-    ref: registry.example.com/my-service:v1.0.0
+    ref: oci://registry.example.com/my-service:v1.0.0
     registry: registry.example.com
     username: ${{ secrets.REGISTRY_USERNAME }}
     password: ${{ secrets.REGISTRY_PASSWORD }}
@@ -285,7 +285,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: push
-          ref: ghcr.io/my-org/my-service:${{ steps.contract.outputs.version }}
+          ref: oci://ghcr.io/my-org/my-service:${{ steps.contract.outputs.version }}
           path: ./pactos/my-service
 ```
 
@@ -293,7 +293,7 @@ jobs:
 
 - **`permissions: packages: write`** is required at the workflow or job level for the `GITHUB_TOKEN` to push to GHCR. Without it, pushes fail regardless of authentication method. **`pull-requests: write`** is needed for the `doc` command's `comment-on-pr` feature.
 - **Version extraction** reads the `version` field from `pacto.yaml` so the OCI tag matches the contract version. Adjust the `grep`/`awk` command to match your `pacto.yaml` structure, or use [`yq`](https://github.com/mikefarah/yq) for more robust YAML parsing: `yq '.version' ./pactos/my-service/pacto.yaml`.
-- **`oci://` prefix** is used in `diff` to reference remote contracts. The `push` command takes bare registry refs without the `oci://` prefix.
+- **`oci://` prefix** is used consistently across all commands (`diff`, `push`, `doc`, etc.) to reference remote contracts.
 - **First-time GHCR push:** If the package does not exist yet, the first push creates it. If a package already exists and was created by a different token, see the [GHCR troubleshooting section](#github-container-registry-ghcr) above.
 
 ## Multi-Service Workflow
@@ -362,7 +362,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: push
-          ref: ghcr.io/my-org/payments-service:latest
+          ref: oci://ghcr.io/my-org/payments-service:latest
           path: ./pactos/payments-service
 
       - uses: trianalab/pacto-actions@v1
@@ -371,7 +371,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: push
-          ref: ghcr.io/my-org/users-service:latest
+          ref: oci://ghcr.io/my-org/users-service:latest
           path: ./pactos/users-service
 
       - uses: trianalab/pacto-actions@v1
@@ -380,7 +380,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: push
-          ref: ghcr.io/my-org/notifications-service:latest
+          ref: oci://ghcr.io/my-org/notifications-service:latest
           path: ./pactos/notifications-service
 ```
 
