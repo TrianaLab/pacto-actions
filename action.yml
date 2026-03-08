@@ -36,7 +36,7 @@ inputs:
     default: 'true'
   # push inputs
   ref:
-    description: '[push] OCI reference (e.g., ghcr.io/org/name:tag)'
+    description: '[push] OCI reference (e.g., oci://ghcr.io/org/name:tag)'
     required: false
   path:
     description: '[push/doc] Path to the contract directory or oci:// reference'
