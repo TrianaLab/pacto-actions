@@ -16,7 +16,7 @@ inputs:
     required: false
     default: 'latest'
   github-token:
-    description: '[setup/doc] GitHub token for API requests (setup: releases API, doc: PR comments)'
+    description: 'GitHub token passed as GH_TOKEN to all commands'
     required: false
     default: ${{ github.token }}
   # cache inputs
@@ -204,6 +204,7 @@ runs:
       id: diff
       shell: bash
       env:
+        GH_TOKEN: ${{ inputs.github-token }}
         OLD_REF: ${{ inputs.old }}
         NEW_REF: ${{ inputs.new }}
         OUTPUT_FORMAT: ${{ inputs.output-format }}
@@ -285,6 +286,7 @@ runs:
       if: inputs.command == 'push'
       shell: bash
       env:
+        GH_TOKEN: ${{ inputs.github-token }}
         REF: ${{ inputs.ref }}
         CONTRACT_PATH: ${{ inputs.path }}
         PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
@@ -300,6 +302,7 @@ runs:
       id: doc
       shell: bash
       env:
+        GH_TOKEN: ${{ inputs.github-token }}
         CONTRACT_PATH: ${{ inputs.path }}
         OUTPUT_PATH: ${{ inputs.output-path }}
         ADD_TO_SUMMARY: ${{ inputs.add-to-summary }}
