@@ -93,6 +93,7 @@ Compares two contracts and classifies changes as non-breaking or potentially bre
 | `new` | Updated contract: directory path or `oci://` reference | Yes | — |
 | `output-format` | Output format: `text` or `json` | No | `text` |
 | `fail-on-breaking` | Fail the action if breaking changes are detected | No | `true` |
+| `comment-on-pr` | Post the diff results as a PR comment | No | `false` |
 
 > **`oci://` prefix:** All commands that accept OCI references use the `oci://` prefix consistently (e.g., `oci://ghcr.io/my-org/my-service:v1.0.0`). This applies to `diff`, `push`, `doc`, and any other command that references remote contracts.
 
