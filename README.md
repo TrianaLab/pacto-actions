@@ -40,7 +40,7 @@ Downloads and installs the Pacto CLI binary.
 | Name | Description | Required | Default |
 |------|-------------|----------|---------|
 | `version` | Pacto version to install (e.g., `v0.2.1`) | No | `latest` |
-| `github-token` | GitHub token for API requests to avoid rate limiting | No | `${{ github.token }}` |
+| `github-token` | GitHub token passed as `GH_TOKEN` to all commands (used for GHCR auth, PR comments, API requests) | No | `${{ github.token }}` |
 
 ### Outputs
 
@@ -202,15 +202,23 @@ jobs:
       packages: write
     steps:
       - uses: trianalab/pacto-actions@v1
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: push
           ref: oci://ghcr.io/my-org/my-service:v1.0.0
           path: ./pactos/my-service
 ```
 
-Pacto detects GHCR credentials from the `GH_TOKEN` environment variable via the GitHub CLI. This works when the `GITHUB_TOKEN` has the `write:packages` scope.
+The action automatically passes `github-token` (defaults to `GITHUB_TOKEN`) as `GH_TOKEN` to all commands — no manual `env` configuration is needed. This works when the `GITHUB_TOKEN` has the `write:packages` scope.
+
+You can override the token via the `github-token` input:
+
+```yaml
+- uses: trianalab/pacto-actions@v1
+  with:
+    command: push
+    ref: oci://ghcr.io/my-org/my-service:v1.0.0
+    github-token: ${{ secrets.CUSTOM_TOKEN }}
+```
 
 **Troubleshooting GHCR permission errors:** If you see `permission_denied: write_package`, the `GITHUB_TOKEN` may lack access to the package. This happens when the GHCR package was originally created by a different user or token. To fix it:
 
@@ -307,8 +315,6 @@ jobs:
       # Push on merge to main
       - uses: trianalab/pacto-actions@v1
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: push
           ref: oci://ghcr.io/my-org/my-service:${{ steps.contract.outputs.version }}
@@ -384,8 +390,6 @@ jobs:
       # Push contracts on merge to main
       - uses: trianalab/pacto-actions@v1
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: push
           ref: oci://ghcr.io/my-org/payments-service:latest
@@ -393,8 +397,6 @@ jobs:
 
       - uses: trianalab/pacto-actions@v1
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: push
           ref: oci://ghcr.io/my-org/users-service:latest
@@ -402,8 +404,6 @@ jobs:
 
       - uses: trianalab/pacto-actions@v1
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: push
           ref: oci://ghcr.io/my-org/notifications-service:latest
