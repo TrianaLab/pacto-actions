@@ -61,7 +61,7 @@ inputs:
     description: '[doc] File path to save the generated markdown documentation'
     required: false
   comment-on-pr:
-    description: '[doc] Post the documentation as a PR comment'
+    description: '[diff/doc] Post the output as a PR comment'
     required: false
     default: 'false'
   add-to-summary:
@@ -245,6 +245,75 @@ runs:
           echo "has-breaking-changes=false" >> "${GITHUB_OUTPUT}"
         fi
 
+    - name: Comment diff on PR
+      if: always() && inputs.command == 'diff' && inputs.comment-on-pr == 'true' && steps.diff.outcome != 'skipped'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        DIFF_OUTPUT: ${{ steps.diff.outputs.diff-output }}
+        HAS_BREAKING: ${{ steps.diff.outputs.has-breaking-changes }}
+        NEW_REF: ${{ inputs.new }}
+      run: |
+        set -euo pipefail
+
+        # Determine PR number
+        if [ "${EVENT_NAME}" = "pull_request" ] || [ "${EVENT_NAME}" = "pull_request_target" ]; then
+          RESOLVED_PR="${PR_NUMBER}"
+        else
+          echo "::warning::comment-on-pr is enabled but this is not a pull request event (event: ${EVENT_NAME}). Skipping comment."
+          exit 0
+        fi
+
+        if [ -z "${RESOLVED_PR}" ]; then
+          echo "::warning::Could not determine pull request number. Skipping comment."
+          exit 0
+        fi
+
+        MARKER="<!-- pacto-diff-comment:${NEW_REF} -->"
+
+        # Write body to temp file for safe multiline handling
+        BODY_FILE=$(mktemp)
+        {
+          echo "${MARKER}"
+          if [ "${HAS_BREAKING}" = "true" ]; then
+            echo "## ⚠️ Pacto Diff — Breaking Changes Detected"
+          else
+            echo "## ✅ Pacto Diff — No Breaking Changes"
+          fi
+          echo ""
+          echo '```'
+          echo "${DIFF_OUTPUT}"
+          echo '```'
+        } > "${BODY_FILE}"
+
+        # Search for existing comment with marker
+        EXISTING_COMMENT_ID=$(gh api \
+          --paginate \
+          "repos/${REPO}/issues/${RESOLVED_PR}/comments" \
+          --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" \
+          | head -1)
+
+        if [ -n "${EXISTING_COMMENT_ID}" ]; then
+          # Update existing comment
+          gh api \
+            --method PATCH \
+            "repos/${REPO}/issues/comments/${EXISTING_COMMENT_ID}" \
+            -F body=@"${BODY_FILE}"
+          echo "Updated existing PR comment (id: ${EXISTING_COMMENT_ID})"
+        else
+          # Create new comment
+          gh api \
+            --method POST \
+            "repos/${REPO}/issues/${RESOLVED_PR}/comments" \
+            -F body=@"${BODY_FILE}"
+          echo "Created new PR comment"
+        fi
+
+        rm -f "${BODY_FILE}"
+
     # ── Push ───────────────────────────────────────────────
     - name: Validate push inputs
       if: inputs.command == 'push'
@@ -342,6 +411,7 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         REPO: ${{ github.repository }}
         DOC_OUTPUT: ${{ steps.doc.outputs.doc-output }}
+        CONTRACT_PATH: ${{ inputs.path }}
       run: |
         set -euo pipefail
 
@@ -358,7 +428,7 @@ runs:
           exit 0
         fi
 
-        MARKER="<!-- pacto-doc-comment -->"
+        MARKER="<!-- pacto-doc-comment:${CONTRACT_PATH} -->"
 
         # Write body to temp file for safe multiline handling
         BODY_FILE=$(mktemp)

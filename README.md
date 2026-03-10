@@ -93,6 +93,7 @@ Compares two contracts and classifies changes as non-breaking or potentially bre
 | `new` | Updated contract: directory path or `oci://` reference | Yes | — |
 | `output-format` | Output format: `text` or `json` | No | `text` |
 | `fail-on-breaking` | Fail the action if breaking changes are detected | No | `true` |
+| `comment-on-pr` | Post the diff results as a PR comment | No | `false` |
 
 > **`oci://` prefix:** All commands that accept OCI references use the `oci://` prefix consistently (e.g., `oci://ghcr.io/my-org/my-service:v1.0.0`). This applies to `diff`, `push`, `doc`, and any other command that references remote contracts.
 
@@ -155,7 +156,7 @@ Generates markdown documentation from contracts.
     comment-on-pr: 'true'
 ```
 
-> **Note:** The `comment-on-pr` option requires `pull-requests: write` permission for the `GITHUB_TOKEN`. The comment is idempotent — re-runs update the existing comment instead of creating duplicates. However, each **separate action invocation** (e.g., for different services) creates and manages its own independent PR comment. So 3 invocations for 3 services will produce 3 separate PR comments.
+> **Note:** The `comment-on-pr` option requires `pull-requests: write` permission for the `GITHUB_TOKEN`. The comment is idempotent — re-runs update the existing comment instead of creating duplicates. Each action invocation with a different `path` creates and manages its own independent PR comment, so 3 invocations for 3 services will produce 3 separate PR comments.
 
 **Generate documentation from an OCI reference:**
 
@@ -281,19 +282,15 @@ jobs:
         with:
           command: setup
 
-      # Extract version from pacto.yaml for tagging
-      - name: Extract contract version
-        id: contract
-        run: |
-          VERSION=$(grep '^version:' ./pactos/my-service/pacto.yaml | awk '{print $2}')
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
       # Compare against the currently published contract
       - uses: trianalab/pacto-actions@v1
+        if: github.event_name == 'pull_request'
         with:
           command: diff
-          old: oci://ghcr.io/my-org/my-service:latest
+          old: oci://ghcr.io/my-org/my-service
           new: ./pactos/my-service
+          fail-on-breaking: 'false'
+          comment-on-pr: 'true'
 
       # Generate and save contract docs
       - uses: trianalab/pacto-actions@v1
@@ -317,15 +314,14 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           command: push
-          ref: oci://ghcr.io/my-org/my-service:${{ steps.contract.outputs.version }}
+          ref: oci://ghcr.io/my-org/my-service
           path: ./pactos/my-service
 ```
 
 ### Notes on this example
 
-- **`permissions: packages: write`** is required at the workflow or job level for the `GITHUB_TOKEN` to push to GHCR. Without it, pushes fail regardless of authentication method. **`pull-requests: write`** is needed for the `doc` command's `comment-on-pr` feature.
-- **Version extraction** reads the `version` field from `pacto.yaml` so the OCI tag matches the contract version. Adjust the `grep`/`awk` command to match your `pacto.yaml` structure, or use [`yq`](https://github.com/mikefarah/yq) for more robust YAML parsing: `yq '.version' ./pactos/my-service/pacto.yaml`.
-- **`oci://` prefix** is used consistently across all commands (`diff`, `push`, `doc`, etc.) to reference remote contracts.
+- **`permissions: packages: write`** is required at the workflow or job level for the `GITHUB_TOKEN` to push to GHCR. Without it, pushes fail regardless of authentication method. **`pull-requests: write`** is needed for the `diff` and `doc` commands' `comment-on-pr` feature.
+- **`oci://` prefix** is used consistently across all commands (`diff`, `push`, `doc`, etc.) to reference remote contracts. When a tag is omitted, pacto automatically resolves to the highest semver version.
 - **First-time GHCR push:** If the package does not exist yet, the first push creates it. If a package already exists and was created by a different token, see the [GHCR troubleshooting section](#github-container-registry-ghcr) above.
 
 ## Multi-Service Workflow
