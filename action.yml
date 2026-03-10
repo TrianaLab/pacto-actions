@@ -8,7 +8,7 @@ branding:
 
 inputs:
   command:
-    description: 'Command to run: "setup", "diff", "push", or "doc"'
+    description: 'Command to run: "setup", "validate", "diff", "push", or "doc"'
     required: true
   # setup inputs
   version:
@@ -44,7 +44,7 @@ inputs:
     description: '[push] OCI reference (e.g., oci://ghcr.io/org/name:tag)'
     required: false
   path:
-    description: '[push/doc] Path to the contract directory or oci:// reference'
+    description: '[validate/push/doc] Path to the contract directory or oci:// reference'
     required: false
     default: '.'
   registry:
@@ -92,9 +92,9 @@ runs:
         COMMAND: ${{ inputs.command }}
       run: |
         case "${COMMAND}" in
-          setup|diff|push|doc) ;;
+          setup|validate|diff|push|doc) ;;
           *)
-            echo "::error::Invalid command '${COMMAND}'. Must be one of: setup, diff, push, doc"
+            echo "::error::Invalid command '${COMMAND}'. Must be one of: setup, validate, diff, push, doc"
             exit 1
             ;;
         esac
@@ -185,6 +185,18 @@ runs:
         key: pacto-oci-${{ runner.os }}-${{ github.run_id }}
         restore-keys: |
           pacto-oci-${{ runner.os }}-
+
+    # ── Validate ───────────────────────────────────────────
+    - name: Validate contract
+      if: inputs.command == 'validate'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CONTRACT_PATH: ${{ inputs.path }}
+        PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
+      run: |
+        set -euo pipefail
+        pacto validate "${CONTRACT_PATH}"
 
     # ── Diff ───────────────────────────────────────────────
     - name: Validate diff inputs
