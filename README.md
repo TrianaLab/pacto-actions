@@ -6,6 +6,7 @@ GitHub Action for the [Pacto](https://trianalab.github.io/pacto/) CLI — an OCI
 
 - [Commands](#commands)
 - [Setup](#setup)
+- [Caching](#caching)
 - [Diff](#diff)
 - [Doc](#doc)
 - [Push](#push)
@@ -46,6 +47,31 @@ Downloads and installs the Pacto CLI binary.
 | Name | Description |
 |------|-------------|
 | `version` | The exact version that was installed |
+
+## Caching
+
+OCI bundles fetched by Pacto are cached locally at `~/.cache/pacto/oci/`. This action automatically persists this cache across workflow runs using `actions/cache`, so repeated references to the same OCI bundles are resolved faster.
+
+Caching is **enabled by default** for all commands that interact with OCI references (`diff`, `doc`, `push`). No additional configuration is needed.
+
+### Inputs
+
+| Name | Description | Required | Default |
+|------|-------------|----------|---------|
+| `cache` | Enable OCI bundle caching across workflow runs | No | `true` |
+
+### Disabling the cache
+
+To bypass caching (equivalent to `pacto --no-cache`):
+
+```yaml
+- uses: trianalab/pacto-actions@v1
+  with:
+    command: diff
+    old: oci://ghcr.io/my-org/my-service:v1.0.0
+    new: ./pactos/my-service
+    cache: 'false'
+```
 
 ## Diff
 

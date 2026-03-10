@@ -19,6 +19,11 @@ inputs:
     description: '[setup/doc] GitHub token for API requests (setup: releases API, doc: PR comments)'
     required: false
     default: ${{ github.token }}
+  # cache inputs
+  cache:
+    description: 'Enable OCI bundle caching across workflow runs (uses ~/.cache/pacto/oci/)'
+    required: false
+    default: 'true'
   # diff inputs
   old:
     description: '[diff] Baseline contract: directory path or oci:// reference'
@@ -171,6 +176,16 @@ runs:
       shell: bash
       run: pacto version
 
+    # ── Cache ──────────────────────────────────────────────
+    - name: Restore OCI bundle cache
+      if: inputs.command != 'setup' && inputs.cache == 'true'
+      uses: actions/cache@v5.0.3
+      with:
+        path: ~/.cache/pacto/oci/
+        key: pacto-oci-${{ runner.os }}-${{ github.run_id }}
+        restore-keys: |
+          pacto-oci-${{ runner.os }}-
+
     # ── Diff ───────────────────────────────────────────────
     - name: Validate diff inputs
       if: inputs.command == 'diff'
@@ -193,6 +208,7 @@ runs:
         NEW_REF: ${{ inputs.new }}
         OUTPUT_FORMAT: ${{ inputs.output-format }}
         FAIL_ON_BREAKING: ${{ inputs.fail-on-breaking }}
+        PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
       run: |
         set +e
         OUTPUT=$(pacto diff "${OLD_REF}" "${NEW_REF}" --output-format "${OUTPUT_FORMAT}" 2>&1)
@@ -271,6 +287,7 @@ runs:
       env:
         REF: ${{ inputs.ref }}
         CONTRACT_PATH: ${{ inputs.path }}
+        PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
       run: |
         set -euo pipefail
         echo "Pushing contract to ${REF}..."
@@ -286,6 +303,7 @@ runs:
         CONTRACT_PATH: ${{ inputs.path }}
         OUTPUT_PATH: ${{ inputs.output-path }}
         ADD_TO_SUMMARY: ${{ inputs.add-to-summary }}
+        PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
       run: |
         set -euo pipefail
 
