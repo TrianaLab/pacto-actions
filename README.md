@@ -7,6 +7,7 @@ GitHub Action for the [Pacto](https://trianalab.github.io/pacto/) CLI — an OCI
 - [Commands](#commands)
 - [Setup](#setup)
 - [Caching](#caching)
+- [Validate](#validate)
 - [Diff](#diff)
 - [Doc](#doc)
 - [Push](#push)
@@ -20,6 +21,7 @@ GitHub Action for the [Pacto](https://trianalab.github.io/pacto/) CLI — an OCI
 | Command | Description |
 |---------|-------------|
 | `setup` | Install the Pacto CLI |
+| `validate` | Validate a contract against the specification |
 | `diff` | Compare contracts and detect breaking changes |
 | `push` | Push contracts to an OCI registry |
 | `doc` | Generate markdown documentation from contracts |
@@ -72,6 +74,23 @@ To bypass caching (equivalent to `pacto --no-cache`):
     new: ./pactos/my-service
     cache: 'false'
 ```
+
+## Validate
+
+Validates a contract against the Pacto specification, checking structural, cross-field, and semantic rules.
+
+```yaml
+- uses: trianalab/pacto-actions@v1
+  with:
+    command: validate
+    path: ./pactos/my-service
+```
+
+### Inputs
+
+| Name | Description | Required | Default |
+|------|-------------|----------|---------|
+| `path` | Contract source: directory path or `oci://` reference | No | `.` |
 
 ## Diff
 
