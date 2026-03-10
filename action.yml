@@ -246,7 +246,7 @@ runs:
         fi
 
     - name: Comment diff on PR
-      if: inputs.command == 'diff' && inputs.comment-on-pr == 'true'
+      if: always() && inputs.command == 'diff' && inputs.comment-on-pr == 'true' && steps.diff.outcome != 'skipped'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -255,6 +255,7 @@ runs:
         REPO: ${{ github.repository }}
         DIFF_OUTPUT: ${{ steps.diff.outputs.diff-output }}
         HAS_BREAKING: ${{ steps.diff.outputs.has-breaking-changes }}
+        NEW_REF: ${{ inputs.new }}
       run: |
         set -euo pipefail
 
@@ -271,7 +272,7 @@ runs:
           exit 0
         fi
 
-        MARKER="<!-- pacto-diff-comment -->"
+        MARKER="<!-- pacto-diff-comment:${NEW_REF} -->"
 
         # Write body to temp file for safe multiline handling
         BODY_FILE=$(mktemp)
@@ -410,6 +411,7 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         REPO: ${{ github.repository }}
         DOC_OUTPUT: ${{ steps.doc.outputs.doc-output }}
+        CONTRACT_PATH: ${{ inputs.path }}
       run: |
         set -euo pipefail
 
@@ -426,7 +428,7 @@ runs:
           exit 0
         fi
 
-        MARKER="<!-- pacto-doc-comment -->"
+        MARKER="<!-- pacto-doc-comment:${CONTRACT_PATH} -->"
 
         # Write body to temp file for safe multiline handling
         BODY_FILE=$(mktemp)
