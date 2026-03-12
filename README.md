@@ -110,7 +110,7 @@ Compares two contracts and classifies changes as non-breaking or potentially bre
 |------|-------------|----------|---------|
 | `old` | Baseline contract: directory path or `oci://` reference | Yes | — |
 | `new` | Updated contract: directory path or `oci://` reference | Yes | — |
-| `output-format` | Output format: `text` or `json` | No | `text` |
+| `output-format` | Output format: `text`, `json`, or `markdown` | No | `text` |
 | `fail-on-breaking` | Fail the action if breaking changes are detected | No | `true` |
 | `comment-on-pr` | Post the diff results as a PR comment | No | `false` |
 
