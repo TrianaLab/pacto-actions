@@ -32,7 +32,7 @@ inputs:
     description: '[diff] Updated contract: directory path or oci:// reference'
     required: false
   output-format:
-    description: '[diff] Output format: "text" or "json"'
+    description: '[diff] Output format: "text", "json", or "markdown"'
     required: false
     default: 'text'
   fail-on-breaking:
@@ -239,9 +239,13 @@ runs:
         {
           echo "## Pacto Diff Results"
           echo ""
-          echo '```'
-          echo "${OUTPUT}"
-          echo '```'
+          if [ "${OUTPUT_FORMAT}" = "markdown" ]; then
+            echo "${OUTPUT}"
+          else
+            echo '```'
+            echo "${OUTPUT}"
+            echo '```'
+          fi
         } >> "${GITHUB_STEP_SUMMARY}"
 
         echo "${OUTPUT}"
@@ -268,6 +272,7 @@ runs:
         DIFF_OUTPUT: ${{ steps.diff.outputs.diff-output }}
         HAS_BREAKING: ${{ steps.diff.outputs.has-breaking-changes }}
         NEW_REF: ${{ inputs.new }}
+        OUTPUT_FORMAT: ${{ inputs.output-format }}
       run: |
         set -euo pipefail
 
@@ -296,9 +301,13 @@ runs:
             echo "## ✅ Pacto Diff — No Breaking Changes"
           fi
           echo ""
-          echo '```'
-          echo "${DIFF_OUTPUT}"
-          echo '```'
+          if [ "${OUTPUT_FORMAT}" = "markdown" ]; then
+            echo "${DIFF_OUTPUT}"
+          else
+            echo '```'
+            echo "${DIFF_OUTPUT}"
+            echo '```'
+          fi
         } > "${BODY_FILE}"
 
         # Search for existing comment with marker
