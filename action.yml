@@ -110,71 +110,19 @@ runs:
       run: |
         set -euo pipefail
 
-        # Resolve version
-        if [ "${VERSION}" = "latest" ]; then
-          VERSION=$(gh api repos/TrianaLab/pacto/releases/latest --jq '.tag_name')
-          echo "Resolved latest version: ${VERSION}"
+        # Build install script arguments
+        ARGS="--no-sudo"
+        if [ "${VERSION}" != "latest" ]; then
+          ARGS="${ARGS} --version ${VERSION}"
         fi
 
-        # Ensure version starts with 'v'
-        if [[ "${VERSION}" != v* ]]; then
-          VERSION="v${VERSION}"
-        fi
+        # Install using the official install script
+        curl -fsSL https://raw.githubusercontent.com/TrianaLab/pacto/main/scripts/get-pacto.sh | bash -s -- ${ARGS}
 
-        # Map runner OS to Pacto binary OS name
-        case "${{ runner.os }}" in
-          Linux)   OS="linux" ;;
-          macOS)   OS="darwin" ;;
-          Windows) OS="windows" ;;
-          *)
-            echo "::error::Unsupported OS: ${{ runner.os }}"
-            exit 1
-            ;;
-        esac
-
-        # Map runner arch to Pacto binary arch name
-        case "${{ runner.arch }}" in
-          X64)   ARCH="amd64" ;;
-          ARM64) ARCH="arm64" ;;
-          *)
-            echo "::error::Unsupported architecture: ${{ runner.arch }}"
-            exit 1
-            ;;
-        esac
-
-        # Construct binary name and download URL
-        BINARY="pacto_${OS}_${ARCH}"
-        if [ "${OS}" = "windows" ]; then
-          BINARY="${BINARY}.exe"
-        fi
-        DOWNLOAD_URL="https://github.com/TrianaLab/pacto/releases/download/${VERSION}/${BINARY}"
-
-        # Download binary
-        INSTALL_DIR="${RUNNER_TEMP}/pacto"
-        mkdir -p "${INSTALL_DIR}"
-        TARGET="${INSTALL_DIR}/pacto"
-        if [ "${OS}" = "windows" ]; then
-          TARGET="${TARGET}.exe"
-        fi
-
-        echo "Downloading Pacto ${VERSION} (${OS}/${ARCH})..."
-        curl -fsSL "${DOWNLOAD_URL}" -o "${TARGET}"
-
-        if [ "${OS}" != "windows" ]; then
-          chmod +x "${TARGET}"
-        fi
-
-        # Add to PATH
-        echo "${INSTALL_DIR}" >> "${GITHUB_PATH}"
-
-        # Outputs
-        echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
-        echo "Pacto ${VERSION} installed successfully"
-
-    - name: Verify installation
-      if: inputs.command == 'setup'
-      shell: bash
-      run: pacto version
+        # Capture installed version
+        INSTALLED_VERSION=$(pacto version 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "${VERSION}")
+        echo "version=${INSTALLED_VERSION}" >> "${GITHUB_OUTPUT}"
+        echo "Pacto ${INSTALLED_VERSION} installed successfully"
 
     # ── Cache ──────────────────────────────────────────────
     - name: Restore OCI bundle cache
