@@ -56,6 +56,26 @@ inputs:
   password:
     description: '[push] Registry password or token for authentication'
     required: false
+  # override inputs (all commands except setup)
+  values:
+    description: '[validate/diff/doc/push] Values file(s) to merge into the contract (newline-separated, last wins)'
+    required: false
+  set:
+    description: '[validate/diff/doc/push] Set contract values inline (newline-separated, e.g. service.version=2.0.0)'
+    required: false
+  # diff-specific override inputs
+  old-values:
+    description: '[diff] Values file(s) to merge into the old contract (newline-separated)'
+    required: false
+  old-set:
+    description: '[diff] Set values on the old contract (newline-separated)'
+    required: false
+  new-values:
+    description: '[diff] Values file(s) to merge into the new contract (newline-separated)'
+    required: false
+  new-set:
+    description: '[diff] Set values on the new contract (newline-separated, e.g. service.version=2.0.0)'
+    required: false
   # doc inputs
   output-path:
     description: '[doc] File path to save the generated markdown documentation'
@@ -142,9 +162,22 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         CONTRACT_PATH: ${{ inputs.path }}
         PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
+        VALUES: ${{ inputs.values }}
+        SET: ${{ inputs.set }}
       run: |
         set -euo pipefail
-        pacto validate "${CONTRACT_PATH}"
+        ARGS=()
+        if [ -n "${VALUES}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--values "${line}")
+          done <<< "${VALUES}"
+        fi
+        if [ -n "${SET}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--set "${line}")
+          done <<< "${SET}"
+        fi
+        pacto validate "${CONTRACT_PATH}" "${ARGS[@]}"
 
     # ── Diff ───────────────────────────────────────────────
     - name: Validate diff inputs
@@ -170,9 +203,50 @@ runs:
         OUTPUT_FORMAT: ${{ inputs.output-format }}
         FAIL_ON_BREAKING: ${{ inputs.fail-on-breaking }}
         PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
+        VALUES: ${{ inputs.values }}
+        SET: ${{ inputs.set }}
+        OLD_VALUES: ${{ inputs.old-values }}
+        OLD_SET: ${{ inputs.old-set }}
+        NEW_VALUES: ${{ inputs.new-values }}
+        NEW_SET: ${{ inputs.new-set }}
       run: |
+        ARGS=()
+        # Common overrides (applied to both sides)
+        if [ -n "${VALUES}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--values "${line}")
+          done <<< "${VALUES}"
+        fi
+        if [ -n "${SET}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--set "${line}")
+          done <<< "${SET}"
+        fi
+        # Old-specific overrides
+        if [ -n "${OLD_VALUES}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--old-values "${line}")
+          done <<< "${OLD_VALUES}"
+        fi
+        if [ -n "${OLD_SET}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--old-set "${line}")
+          done <<< "${OLD_SET}"
+        fi
+        # New-specific overrides
+        if [ -n "${NEW_VALUES}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--new-values "${line}")
+          done <<< "${NEW_VALUES}"
+        fi
+        if [ -n "${NEW_SET}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--new-set "${line}")
+          done <<< "${NEW_SET}"
+        fi
+
         set +e
-        OUTPUT=$(pacto diff "${OLD_REF}" "${NEW_REF}" --output-format "${OUTPUT_FORMAT}" 2>&1)
+        OUTPUT=$(pacto diff "${OLD_REF}" "${NEW_REF}" --output-format "${OUTPUT_FORMAT}" "${ARGS[@]}" 2>&1)
         EXIT_CODE=$?
         set -e
 
@@ -328,10 +402,23 @@ runs:
         REF: ${{ inputs.ref }}
         CONTRACT_PATH: ${{ inputs.path }}
         PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
+        VALUES: ${{ inputs.values }}
+        SET: ${{ inputs.set }}
       run: |
         set -euo pipefail
+        ARGS=()
+        if [ -n "${VALUES}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--values "${line}")
+          done <<< "${VALUES}"
+        fi
+        if [ -n "${SET}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--set "${line}")
+          done <<< "${SET}"
+        fi
         echo "Pushing contract to ${REF}..."
-        pacto push "${REF}" -p "${CONTRACT_PATH}"
+        pacto push "${REF}" -p "${CONTRACT_PATH}" "${ARGS[@]}"
         echo "Contract pushed successfully to ${REF}"
 
     # ── Doc ────────────────────────────────────────────────
@@ -345,10 +432,24 @@ runs:
         OUTPUT_PATH: ${{ inputs.output-path }}
         ADD_TO_SUMMARY: ${{ inputs.add-to-summary }}
         PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
+        VALUES: ${{ inputs.values }}
+        SET: ${{ inputs.set }}
       run: |
         set -euo pipefail
 
-        OUTPUT=$(pacto doc "${CONTRACT_PATH}")
+        ARGS=()
+        if [ -n "${VALUES}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--values "${line}")
+          done <<< "${VALUES}"
+        fi
+        if [ -n "${SET}" ]; then
+          while IFS= read -r line; do
+            [ -n "${line}" ] && ARGS+=(--set "${line}")
+          done <<< "${SET}"
+        fi
+
+        OUTPUT=$(pacto doc "${CONTRACT_PATH}" "${ARGS[@]}")
 
         # Set output using heredoc delimiter for multiline safety
         {
