@@ -7,6 +7,7 @@ GitHub Action for the [Pacto](https://trianalab.github.io/pacto/) CLI — an OCI
 - [Commands](#commands)
 - [Setup](#setup)
 - [Caching](#caching)
+- [Overrides](#overrides)
 - [Validate](#validate)
 - [Diff](#diff)
 - [Doc](#doc)
@@ -75,6 +76,56 @@ To bypass caching (equivalent to `pacto --no-cache`):
     cache: 'false'
 ```
 
+## Overrides
+
+All commands (except `setup`) support contract value overrides via `values` and `set` inputs. These let you modify contract fields without editing files — useful for environment-specific validation, CI pipelines, and what-if analysis.
+
+| Name | Description | Commands |
+|------|-------------|----------|
+| `values` | Values file(s) to merge into the contract (newline-separated, last wins) | validate, diff, doc, push |
+| `set` | Set contract values inline (newline-separated, e.g. `service.version=2.0.0`) | validate, diff, doc, push |
+| `old-values` | Values file(s) to merge into the old contract (newline-separated) | diff |
+| `old-set` | Set values on the old contract (newline-separated) | diff |
+| `new-values` | Values file(s) to merge into the new contract (newline-separated) | diff |
+| `new-set` | Set values on the new contract (newline-separated, e.g. `service.version=2.0.0`) | diff |
+
+### Examples
+
+**Validate with environment-specific values:**
+
+```yaml
+- uses: trianalab/pacto-actions@v1
+  with:
+    command: validate
+    path: ./pactos/my-service
+    values: values/production.yaml
+```
+
+**Diff with overrides on the new contract:**
+
+```yaml
+- uses: trianalab/pacto-actions@v1
+  with:
+    command: diff
+    old: oci://ghcr.io/my-org/my-service
+    new: ./pactos/my-service
+    new-set: |
+      service.version=2.0.0
+      interfaces[0].port=9090
+```
+
+**Multiple values files (last wins):**
+
+```yaml
+- uses: trianalab/pacto-actions@v1
+  with:
+    command: validate
+    path: ./pactos/my-service
+    values: |
+      values/defaults.yaml
+      values/production.yaml
+```
+
 ## Validate
 
 Validates a contract against the Pacto specification, checking structural, cross-field, and semantic rules.
@@ -91,6 +142,8 @@ Validates a contract against the Pacto specification, checking structural, cross
 | Name | Description | Required | Default |
 |------|-------------|----------|---------|
 | `path` | Contract source: directory path or `oci://` reference | No | `.` |
+| `values` | Values file(s) to merge (newline-separated) | No | — |
+| `set` | Inline value overrides (newline-separated) | No | — |
 
 ## Diff
 
@@ -113,6 +166,12 @@ Compares two contracts and classifies changes as non-breaking or potentially bre
 | `output-format` | Output format: `text`, `json`, or `markdown` | No | `text` |
 | `fail-on-breaking` | Fail the action if breaking changes are detected | No | `true` |
 | `comment-on-pr` | Post the diff results as a PR comment | No | `false` |
+| `values` | Values file(s) to merge into both contracts (newline-separated) | No | — |
+| `set` | Inline value overrides for both contracts (newline-separated) | No | — |
+| `old-values` | Values file(s) to merge into the old contract (newline-separated) | No | — |
+| `old-set` | Inline value overrides for the old contract (newline-separated) | No | — |
+| `new-values` | Values file(s) to merge into the new contract (newline-separated) | No | — |
+| `new-set` | Inline value overrides for the new contract (newline-separated) | No | — |
 
 > **`oci://` prefix:** All commands that accept OCI references use the `oci://` prefix consistently (e.g., `oci://ghcr.io/my-org/my-service:v1.0.0`). This applies to `diff`, `push`, `doc`, and any other command that references remote contracts.
 
@@ -142,6 +201,8 @@ Generates markdown documentation from contracts.
 | `output-path` | File path to save the generated markdown (e.g., `docs/contract-api.md`) | No | — |
 | `comment-on-pr` | Post the documentation as a PR comment | No | `false` |
 | `add-to-summary` | Add the documentation to the GitHub Step Summary | No | `true` |
+| `values` | Values file(s) to merge (newline-separated) | No | — |
+| `set` | Inline value overrides (newline-separated) | No | — |
 
 ### Outputs
 
@@ -207,6 +268,8 @@ Pushes validated contracts to an OCI registry.
 | `registry` | Registry hostname for authentication | No | — |
 | `username` | Registry username | No | — |
 | `password` | Registry password or token | No | — |
+| `values` | Values file(s) to merge (newline-separated) | No | — |
+| `set` | Inline value overrides (newline-separated) | No | — |
 
 ### Authentication
 
