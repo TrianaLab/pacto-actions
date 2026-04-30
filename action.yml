@@ -147,7 +147,7 @@ runs:
     # ── Cache ──────────────────────────────────────────────
     - name: Restore OCI bundle cache
       if: inputs.command != 'setup' && inputs.cache == 'true'
-      uses: actions/cache@v5.0.3
+      uses: actions/cache@v5.0.5
       with:
         path: ~/.cache/pacto/oci/
         key: pacto-oci-${{ runner.os }}-${{ github.run_id }}
