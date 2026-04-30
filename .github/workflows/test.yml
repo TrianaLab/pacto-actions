@@ -30,19 +30,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
-      # Pin to avoid the install script's unauthenticated "latest" lookup,
-      # which hits GitHub API rate limits on shared macOS runner IPs.
-      - name: Setup pacto
-        id: setup
-        uses: ./
-        with:
-          command: setup
-          version: v1.3.2
-
-      - name: Verify install
+      # Install pacto directly from the release download URL instead of using
+      # the action's `setup` command, because the upstream install script
+      # makes unauthenticated api.github.com calls that get rate-limited on
+      # shared macOS runner IPs. Releases download URLs are not API-rate-limited.
+      - name: Install pacto
+        env:
+          PACTO_VERSION: v1.3.2
         run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64|amd64) arch=amd64 ;;
+            aarch64|arm64) arch=arm64 ;;
+            *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
+          esac
+          os="$(uname | tr '[:upper:]' '[:lower:]')"
+          url="https://github.com/TrianaLab/pacto/releases/download/${PACTO_VERSION}/pacto_${os}_${arch}"
+          curl -fsSL -o /tmp/pacto "$url"
+          chmod +x /tmp/pacto
+          sudo mv /tmp/pacto /usr/local/bin/pacto
           pacto version
-          test -n "${{ steps.setup.outputs.version }}"
 
       - name: Create fixture contract
         run: |
