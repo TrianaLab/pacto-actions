@@ -177,7 +177,7 @@ runs:
             [ -n "${line}" ] && ARGS+=(--set "${line}")
           done <<< "${SET}"
         fi
-        pacto validate "${CONTRACT_PATH}" "${ARGS[@]}"
+        pacto validate "${CONTRACT_PATH}" ${ARGS[@]+"${ARGS[@]}"}
 
     # ── Diff ───────────────────────────────────────────────
     - name: Validate diff inputs
@@ -246,7 +246,7 @@ runs:
         fi
 
         set +e
-        OUTPUT=$(pacto diff "${OLD_REF}" "${NEW_REF}" --output-format "${OUTPUT_FORMAT}" "${ARGS[@]}" 2>&1)
+        OUTPUT=$(pacto diff "${OLD_REF}" "${NEW_REF}" --output-format "${OUTPUT_FORMAT}" ${ARGS[@]+"${ARGS[@]}"} 2>&1)
         EXIT_CODE=$?
         set -e
 
@@ -455,7 +455,7 @@ runs:
           done <<< "${SET}"
         fi
         echo "Pushing contract to ${REF}..."
-        pacto push "${REF}" -p "${CONTRACT_PATH}" "${ARGS[@]}"
+        pacto push "${REF}" -p "${CONTRACT_PATH}" ${ARGS[@]+"${ARGS[@]}"}
         echo "Contract pushed successfully to ${REF}"
 
     # ── Doc ────────────────────────────────────────────────
@@ -486,7 +486,7 @@ runs:
           done <<< "${SET}"
         fi
 
-        OUTPUT=$(pacto doc "${CONTRACT_PATH}" "${ARGS[@]}")
+        OUTPUT=$(pacto doc "${CONTRACT_PATH}" ${ARGS[@]+"${ARGS[@]}"})
 
         # Set output using heredoc delimiter for multiline safety
         {
