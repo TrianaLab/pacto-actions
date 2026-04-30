@@ -30,11 +30,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
+      # Pin to avoid the install script's unauthenticated "latest" lookup,
+      # which hits GitHub API rate limits on shared macOS runner IPs.
       - name: Setup pacto
         id: setup
         uses: ./
         with:
           command: setup
+          version: v1.3.2
 
       - name: Verify install
         run: |
