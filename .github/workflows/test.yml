@@ -1,0 +1,81 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Run actionlint
+        uses: reviewdog/action-actionlint@v1
+        with:
+          fail_level: error
+
+  smoke:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Setup pacto
+        id: setup
+        uses: ./
+        with:
+          command: setup
+
+      - name: Verify install
+        run: |
+          pacto version
+          test -n "${{ steps.setup.outputs.version }}"
+
+      - name: Create fixture contract
+        run: |
+          mkdir -p contract
+          cat > contract/pacto.yaml <<'EOF'
+          pactoVersion: "1.0"
+          service:
+            name: smoke-test
+            version: 1.0.0
+          EOF
+
+      - name: Validate contract
+        uses: ./
+        with:
+          command: validate
+          path: contract
+
+      - name: Generate doc
+        uses: ./
+        with:
+          command: doc
+          path: contract
+          add-to-summary: 'false'
+
+      - name: Diff contract against itself
+        id: diff
+        uses: ./
+        with:
+          command: diff
+          old: contract
+          new: contract
+          fail-on-breaking: 'true'
+
+      - name: Verify no breaking changes detected
+        run: |
+          if [ "${{ steps.diff.outputs.has-breaking-changes }}" != "false" ]; then
+            echo "::error::Expected has-breaking-changes=false, got '${{ steps.diff.outputs.has-breaking-changes }}'"
+            exit 1
+          fi

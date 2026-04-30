@@ -1,0 +1,86 @@
+name: Auto release
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine version bump
+        id: bump
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ "$PR_TITLE" =~ ^[a-z]+(\(.+\))?\!: ]]; then
+            echo "type=major" >> "$GITHUB_OUTPUT"
+          elif [[ "$PR_TITLE" =~ ^feat(\(.+\))?: ]]; then
+            echo "type=minor" >> "$GITHUB_OUTPUT"
+          elif [[ "$PR_TITLE" =~ ^(fix|perf|refactor)(\(.+\))?\!?: ]]; then
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+          else
+            echo "Skipping release for: $PR_TITLE"
+            echo "type=skip" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6.0.2
+        if: steps.bump.outputs.type != 'skip'
+        with:
+          fetch-depth: 0
+
+      - name: Calculate next version
+        if: steps.bump.outputs.type != 'skip'
+        id: version
+        env:
+          BUMP_TYPE: ${{ steps.bump.outputs.type }}
+        run: |
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [ -z "$latest" ]; then
+            latest="v0.0.0"
+          fi
+          version="${latest#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+
+          case "$BUMP_TYPE" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+
+          next="v${major}.${minor}.${patch}"
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+          echo "major=v${major}" >> "$GITHUB_OUTPUT"
+          echo "Bumping ${BUMP_TYPE}: $latest -> $next"
+
+      - name: Create GitHub release
+        if: steps.bump.outputs.type != 'skip'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "$NEW_TAG" \
+            --title "$NEW_TAG" \
+            --generate-notes \
+            --target main
+
+      # Major bump: creates the new simple tag (e.g. v2) at the new commit;
+      # the previous major tag (v1) stays at its last commit so existing
+      # pins keep receiving only v1.x updates.
+      # Minor/patch bump: moves the existing major tag (v1) to the new commit.
+      - name: Update major version tag
+        if: steps.bump.outputs.type != 'skip'
+        env:
+          NEW_TAG: ${{ steps.version.outputs.tag }}
+          MAJOR_TAG: ${{ steps.version.outputs.major }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa "$MAJOR_TAG" -m "$NEW_TAG"
+          git push --force origin "$MAJOR_TAG"
