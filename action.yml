@@ -313,6 +313,43 @@ runs:
 
         MARKER="<!-- pacto-diff-comment:${NEW_REF} -->"
 
+        # Wrap markdown tables larger than the threshold in <details> for collapsibility
+        collapse_large_tables() {
+          awk -v threshold=15 '
+            BEGIN { in_table = 0; in_code = 0; row_count = 0 }
+            /^```/ {
+              if (in_table) { flush_table(); in_table = 0; row_count = 0 }
+              in_code = !in_code; print; next
+            }
+            in_code { print; next }
+            /^[[:space:]]*\|/ {
+              if (!in_table) { in_table = 1; row_count = 0 }
+              row_count++
+              table_lines[row_count] = $0
+              next
+            }
+            {
+              if (in_table) { flush_table(); in_table = 0; row_count = 0 }
+              print
+            }
+            END { if (in_table) flush_table() }
+            function flush_table(   i, data_rows) {
+              data_rows = row_count - 2
+              if (data_rows < 0) data_rows = row_count
+              if (row_count > threshold) {
+                print "<details>"
+                print "<summary>Table (" data_rows " rows) — click to expand</summary>"
+                print ""
+                for (i = 1; i <= row_count; i++) print table_lines[i]
+                print ""
+                print "</details>"
+              } else {
+                for (i = 1; i <= row_count; i++) print table_lines[i]
+              }
+            }
+          '
+        }
+
         # Write body to temp file for safe multiline handling
         BODY_FILE=$(mktemp)
         {
@@ -324,7 +361,7 @@ runs:
           fi
           echo ""
           if [ "${OUTPUT_FORMAT}" = "markdown" ]; then
-            echo "${DIFF_OUTPUT}"
+            echo "${DIFF_OUTPUT}" | collapse_large_tables
           else
             echo '```'
             echo "${DIFF_OUTPUT}"
@@ -500,13 +537,50 @@ runs:
 
         MARKER="<!-- pacto-doc-comment:${CONTRACT_PATH} -->"
 
+        # Wrap markdown tables larger than the threshold in <details> for collapsibility
+        collapse_large_tables() {
+          awk -v threshold=15 '
+            BEGIN { in_table = 0; in_code = 0; row_count = 0 }
+            /^```/ {
+              if (in_table) { flush_table(); in_table = 0; row_count = 0 }
+              in_code = !in_code; print; next
+            }
+            in_code { print; next }
+            /^[[:space:]]*\|/ {
+              if (!in_table) { in_table = 1; row_count = 0 }
+              row_count++
+              table_lines[row_count] = $0
+              next
+            }
+            {
+              if (in_table) { flush_table(); in_table = 0; row_count = 0 }
+              print
+            }
+            END { if (in_table) flush_table() }
+            function flush_table(   i, data_rows) {
+              data_rows = row_count - 2
+              if (data_rows < 0) data_rows = row_count
+              if (row_count > threshold) {
+                print "<details>"
+                print "<summary>Table (" data_rows " rows) — click to expand</summary>"
+                print ""
+                for (i = 1; i <= row_count; i++) print table_lines[i]
+                print ""
+                print "</details>"
+              } else {
+                for (i = 1; i <= row_count; i++) print table_lines[i]
+              }
+            }
+          '
+        }
+
         # Write body to temp file for safe multiline handling
         BODY_FILE=$(mktemp)
         {
           echo "${MARKER}"
           echo "## Pacto Contract Documentation"
           echo ""
-          echo "${DOC_OUTPUT}"
+          echo "${DOC_OUTPUT}" | collapse_large_tables
         } > "${BODY_FILE}"
 
         # Search for existing comment with marker
