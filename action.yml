@@ -119,6 +119,13 @@ runs:
             ;;
         esac
 
+        # Disable pacto's update-check footer for the rest of the job. In CI it
+        # fires an anonymous api.github.com call on every command (rate-limits on
+        # shared runners) and prints "A new version of pacto is available…" to
+        # stderr, which leaks into captured output (diff/doc PR comments) and
+        # breaks the setup version capture below.
+        echo "PACTO_NO_UPDATE_CHECK=1" >> "${GITHUB_ENV}"
+
     # ── Setup ──────────────────────────────────────────────
     - name: Install Pacto
       if: inputs.command == 'setup'
@@ -139,8 +146,11 @@ runs:
         # Install using the official install script
         curl -fsSL https://raw.githubusercontent.com/TrianaLab/pacto/main/scripts/get-pacto.sh | bash -s -- ${ARGS}
 
-        # Capture installed version
-        INSTALLED_VERSION=$(pacto version 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "${VERSION}")
+        # Capture installed version — take only the FIRST semver match. `pacto
+        # version` is multiline (and any stray notice can add more matches); a
+        # multiline value breaks GITHUB_OUTPUT with "Invalid format".
+        INSTALLED_VERSION=$(pacto version 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)
+        [ -n "${INSTALLED_VERSION}" ] || INSTALLED_VERSION="${VERSION}"
         echo "version=${INSTALLED_VERSION}" >> "${GITHUB_OUTPUT}"
         echo "Pacto ${INSTALLED_VERSION} installed successfully"
 
