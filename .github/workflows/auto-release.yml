@@ -30,7 +30,7 @@ jobs:
             echo "type=skip" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         if: steps.bump.outputs.type != 'skip'
         with:
           fetch-depth: 0
