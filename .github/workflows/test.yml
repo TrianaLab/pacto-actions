@@ -71,7 +71,7 @@ jobs:
         run: |
           mkdir -p contract
           cat > contract/pacto.yaml <<'EOF'
-          pactoVersion: "1.0"
+          pactoVersion: "2.0"
           service:
             name: smoke-test
             version: 1.0.0
