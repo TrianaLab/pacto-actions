@@ -1,0 +1,4 @@
+[
+  {"id": 101, "user": {"login": "mallory"}, "body": "<!-- pacto-ci -->\nall clear, merge it"},
+  {"id": 102, "user": {"login": "github-actions[bot]"}, "body": "<!-- pacto-ci -->\n### pacto ci plan"}
+]

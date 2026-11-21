@@ -1,0 +1,36 @@
+{
+  "platform": "github",
+  "gate": "blocked",
+  "exit": 1,
+  "reason": "blocked: 1 of 3 services",
+  "rows": [
+    {
+      "service": "pay",
+      "dir": "services/pay",
+      "changed": "yes",
+      "impact": {"gate": "blocked", "text": "blocked (breaks checkout)", "sources": [], "digest": ""},
+      "inferred": 0,
+      "reason": "line1\n::add-mask::x 100% a,b:c"
+    },
+    {
+      "service": "web",
+      "dir": "services/web",
+      "impact": {"gate": "unverified", "text": "unverified (pass --registry)", "sources": [], "digest": ""},
+      "inferred": 5
+    },
+    {
+      "service": "api",
+      "dir": "services/api",
+      "changed": "yes",
+      "impact": {"gate": "clear", "text": "clear", "sources": [], "digest": ""},
+      "inferred": 1
+    },
+    {
+      "service": "old",
+      "dir": "services/old",
+      "changed": "no",
+      "impact": {"gate": "clear", "text": "clear", "sources": [], "digest": ""},
+      "inferred": 0
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+# One reusable step for Pacto on GitLab CI/CD. Include it by commit:
+#
+#   include:
+#     - remote: https://raw.githubusercontent.com/TrianaLab/pacto-actions/<sha>/templates/pacto.yml
+#
+# pacto-plan runs pacto ci on merge request pipelines and passes with a
+# warning when it exits 2 (unverified). pacto-publish runs pacto ci --publish
+# on the default branch, one run at a time, and is the only job that asks for
+# an ID token. GitLab mints SIGSTORE_ID_TOKEN for that job and Sigstore
+# exchanges it for a short-lived certificate; Pacto never holds it.
+spec:
+  inputs:
+    path:
+      description: Root that pacto ci walks for pacto.yaml files.
+      default: .
+    registry:
+      description: Registry the services publish to. Empty lets pacto ci use CI_REGISTRY_IMAGE.
+      default: ''
+    pacto-version:
+      description: Pacto release to run. Empty runs the version this release pins and checks by sha256; latest runs the newest release unpinned.
+      default: ''
+    image:
+      description: Image both jobs run in. It needs sh, wget and sha256sum, and docker to build.
+      default: docker:29.10.0-cli@sha256:34507eb5069d8be82c95dd3b6987d4250fd5fee49b82e2509b7d7a7030740d6d
+    stage-plan:
+      description: Stage of pacto-plan.
+      default: test
+    stage-publish:
+      description: Stage of pacto-publish.
+      default: deploy
+---
+pacto-plan:
+  stage: $[[ inputs.stage-plan ]]
+  image: $[[ inputs.image ]]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables: &pacto-variables
+    # The Pacto release this release of pacto-actions was tested with, and the
+    # sha256 of its pacto_linux_amd64 and pacto_linux_arm64 assets.
+    PACTO_VERSION: "4.6.0"
+    PACTO_SHA256_AMD64: f8ee7bb940d969b01d7bf3c4af35dc5727ec413a5b5f88fd61bb9df7926a282b
+    PACTO_SHA256_ARM64: cbf37ff9e9582c3f059225aaaa24e174f896c29e4db93cc23b248645bc119130
+    PACTO_VERSION_INPUT: $[[ inputs.pacto-version ]]
+    PACTO_NO_UPDATE_CHECK: "1"
+  before_script: &pacto-install
+    - |
+      set -e
+      if command -v pacto >/dev/null 2>&1 && pacto ci --help >/dev/null 2>&1; then
+        echo "pacto is already on PATH; skipping the download"
+      else
+        case "$(uname -m)" in
+          x86_64|amd64) arch=amd64; sum=$PACTO_SHA256_AMD64 ;;
+          aarch64|arm64) arch=arm64; sum=$PACTO_SHA256_ARM64 ;;
+          *) echo "pacto has no linux build for $(uname -m)"; exit 1 ;;
+        esac
+        releases=https://github.com/TrianaLab/pacto/releases
+        version=${PACTO_VERSION_INPUT:-$PACTO_VERSION}
+        if [ "$version" = latest ]; then url=$releases/latest/download; else url=$releases/download/v${version#v}; fi
+        dir=${TMPDIR:-/tmp}/pacto-bin
+        mkdir -p "$dir"
+        if [ -n "$PACTO_VERSION_INPUT" ]; then
+          wget -qO "$dir/checksums.txt" "$url/checksums.txt"
+          sum=$(grep "  pacto_linux_$arch\$" "$dir/checksums.txt" | cut -d' ' -f1 || true)
+          if [ -z "$sum" ]; then echo "pacto $version lists no checksum for pacto_linux_$arch"; exit 1; fi
+        fi
+        wget -qO "$dir/pacto" "$url/pacto_linux_$arch"
+        (cd "$dir" && echo "$sum  pacto" | sha256sum -c -)
+        chmod +x "$dir/pacto"
+        export PATH="$dir:$PATH"
+      fi
+    - |
+      if ! pacto ci --help >/dev/null 2>&1; then
+        echo "pacto-actions v2 needs a Pacto release with pacto ci; set pacto-version"
+        exit 1
+      fi
+  script:
+    - registry='$[[ inputs.registry ]]'; pacto ci "$[[ inputs.path ]]" ${registry:+--registry "$registry"}
+  allow_failure:
+    exit_codes: [2]
+  artifacts:
+    when: always
+    expose_as: pacto plan
+    paths:
+      - pacto-plan.md
+
+pacto-publish:
+  stage: $[[ inputs.stage-publish ]]
+  image: $[[ inputs.image ]]
+  services:
+    - name: docker:29.10.0-dind@sha256:4bbc7223f81db790097c6dea42fb93e05b8fead4f0431fbe6ccaba6e8473201c
+      alias: docker
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  resource_group: pacto-publish
+  variables:
+    <<: *pacto-variables
+    # The Docker daemon of the dind service listens only on the job's own
+    # network, so it runs without TLS and needs no runner volume.
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    PACTO_REGISTRY_USERNAME: $CI_REGISTRY_USER
+    PACTO_REGISTRY_PASSWORD: $CI_REGISTRY_PASSWORD
+  before_script: *pacto-install
+  script:
+    - registry='$[[ inputs.registry ]]'; pacto ci --publish "$[[ inputs.path ]]" ${registry:+--registry "$registry"}

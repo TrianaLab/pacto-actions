@@ -11,13 +11,18 @@ on:
 permissions:
   contents: read
 
+env:
+  # The TrianaLab/pacto commit the reusable workflow is tested with: main
+  # after wave 3 of #452, the first commit with pacto ci and pacto ci --publish.
+  PACTO_TEST_REF: bd0bdc42c6ac71ba7b8f4d0928f4ca933ce788a3
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run actionlint
-        uses: reviewdog/action-actionlint@v1
+        uses: reviewdog/action-actionlint@ae857e78c1b42b3d0a49637181b09d3d56d402b4 # v1.84.1
         with:
           fail_level: error
 
@@ -28,7 +33,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Install pacto directly instead of using the action's `setup` command:
       # the upstream install script makes unauthenticated api.github.com calls
@@ -66,7 +71,7 @@ jobs:
         run: |
           mkdir -p contract
           cat > contract/pacto.yaml <<'EOF'
-          pactoVersion: "1.0"
+          pactoVersion: "2.0"
           service:
             name: smoke-test
             version: 1.0.0
@@ -98,5 +103,162 @@ jobs:
         run: |
           if [ "${{ steps.diff.outputs.has-breaking-changes }}" != "false" ]; then
             echo "::error::Expected has-breaking-changes=false, got '${{ steps.diff.outputs.has-breaking-changes }}'"
+            exit 1
+          fi
+
+  pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every uses is pinned by SHA and pacto by version and sha256
+        run: test/check-pins.sh
+
+  permissions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Only publish holds the OIDC token and only comment writes to pull requests
+        run: test/check-permissions.sh
+
+  annotations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The annotate step escapes a hostile plan and the lookup ignores foreign markers
+        run: test/check-annotations.sh
+
+  build-pacto:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Build pacto at PACTO_TEST_REF
+        run: |
+          CGO_ENABLED=0 GOBIN="$RUNNER_TEMP/bin" go install "github.com/trianalab/pacto/v4/cmd/pacto@${PACTO_TEST_REF}"
+          "$RUNNER_TEMP/bin/pacto" ci --help > /dev/null
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pacto-bin
+          path: ${{ runner.temp }}/bin/pacto
+          retention-days: 1
+
+  # Calls the reusable workflow the way a caller does: the caller grants the
+  # union of its jobs' permissions, or GitHub refuses to start it.
+  reusable:
+    if: github.event_name == 'pull_request'
+    needs: build-pacto
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/ci.yml
+    with:
+      path: test/fixtures/monorepo
+      pacto-artifact: pacto-bin
+      publish: false
+
+  reusable-check:
+    if: github.event_name == 'pull_request'
+    needs: [reusable, build-pacto]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: The reusable workflow reports pacto ci's exit code
+        env:
+          CODE: ${{ needs.reusable.outputs.exit-code }}
+          GATE: ${{ needs.reusable.outputs.gate }}
+        run: |
+          if [ "$CODE" != 2 ] || [ "$GATE" != unverified ]; then
+            echo "::error::exit-code=$CODE gate=$GATE, want 2 and unverified"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pacto-bin
+          path: ${{ runner.temp }}/pacto-bin
+      - name: The annotate step names each service of a real plan on its pacto.yaml
+        run: |
+          chmod +x "$RUNNER_TEMP/pacto-bin/pacto"
+          export PATH="$RUNNER_TEMP/pacto-bin:$PATH"
+          test/check-real-annotations.sh
+
+  # Runs the GitLab component's own pacto-plan lines inside its default image,
+  # with the pacto under test on PATH, and compares the exit code with a
+  # direct pacto ci run on each fixture.
+  gitlab-script:
+    needs: build-pacto
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      registry:
+        image: registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+        ports:
+          - 5000:5000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pacto-bin
+          path: ${{ runner.temp }}/pacto-bin
+      - name: The component's lines exit like pacto ci
+        run: |
+          chmod +x "$RUNNER_TEMP/pacto-bin/pacto"
+          PACTO_BIN="$RUNNER_TEMP/pacto-bin" test/check-gitlab-script.sh
+
+  installer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The component installs the pinned pacto and rejects a corrupted hash
+        run: test/check-installer.sh
+
+  composite:
+    needs: build-pacto
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pacto-bin
+          path: ${{ runner.temp }}/pacto-bin
+      - name: Use pacto from this run
+        run: |
+          chmod +x "$RUNNER_TEMP/pacto-bin/pacto"
+          echo "$RUNNER_TEMP/pacto-bin" >> "$GITHUB_PATH"
+      - name: Plan the collision fixture
+        id: ci
+        continue-on-error: true
+        uses: ./
+        with:
+          command: ci
+          path: test/fixtures/collision
+      - name: The ci command reports exit 1 and fails the step
+        env:
+          CODE: ${{ steps.ci.outputs.exit-code }}
+          GATE: ${{ steps.ci.outputs.gate }}
+          OUTCOME: ${{ steps.ci.outcome }}
+        run: |
+          if [ "$CODE" != 1 ] || [ "$GATE" != blocked ] || [ "$OUTCOME" != failure ]; then
+            echo "::error::exit-code=$CODE gate=$GATE outcome=$OUTCOME, want 1, blocked and failure"
             exit 1
           fi

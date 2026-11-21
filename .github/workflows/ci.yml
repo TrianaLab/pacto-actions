@@ -1,0 +1,375 @@
+name: pacto ci
+
+# One reusable step for Pacto. A caller grants the union of the job
+# permissions below, because GitHub checks every job's map before it starts
+# the workflow, skipped jobs included:
+#
+#   on: [pull_request, push]
+#   permissions: {contents: read, packages: write, id-token: write, pull-requests: write}
+#   jobs:
+#     pacto:
+#       uses: TrianaLab/pacto-actions/.github/workflows/ci.yml@<sha> # v2.0.0
+#
+# plan runs pacto ci on pull requests with read-only permissions. publish runs
+# pacto ci --publish on the default branch and is the only job that holds
+# id-token: write. comment posts the plan on the pull request when asked.
+# GitHub mints the OIDC token for the publish job and Sigstore exchanges it
+# for a short-lived certificate; Pacto never holds it.
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: Root that pacto ci walks for pacto.yaml files.
+        type: string
+        default: .
+      registry:
+        description: Registry the services publish to, for example ghcr.io/acme. Empty lets pacto ci resolve it from the CI platform.
+        type: string
+        default: ''
+      pacto-version:
+        description: Pacto release to run. Empty runs the version this release of pacto-actions pins and checks by sha256; latest runs the newest release unpinned.
+        type: string
+        default: ''
+      pacto-artifact:
+        description: Name of an artifact of this run that holds a static linux pacto binary; it replaces the download.
+        type: string
+        default: ''
+      publish:
+        description: Publish the changed services on a push to the default branch.
+        type: boolean
+        default: true
+      comment:
+        description: Post the plan as one sticky comment on pull requests from this repository.
+        type: boolean
+        default: false
+      fail-on:
+        description: Which plan fails the plan job, blocked (exit 1) or unverified (exit 1 or 2).
+        type: string
+        default: blocked
+      transparency-log:
+        description: With the sign-key secret, record the signatures in the transparency log.
+        type: boolean
+        default: true
+    secrets:
+      registry-username:
+        description: Registry user name; GitHub Container Registry needs none.
+        required: false
+      registry-password:
+        description: Registry password or token.
+        required: false
+      sign-key:
+        description: Cosign private key; publish signs with it instead of keyless.
+        required: false
+      sign-key-password:
+        description: Password of the cosign key.
+        required: false
+    outputs:
+      gate:
+        description: Gate of the plan, clear, blocked or unverified.
+        value: ${{ jobs.plan.outputs.gate }}
+      exit-code:
+        description: Exit code of pacto ci in the plan job, 0 clear, 1 blocked or 2 unverified.
+        value: ${{ jobs.plan.outputs.exit-code }}
+
+env:
+  # The Pacto release this release of pacto-actions was tested with, and the
+  # sha256 of its pacto_linux_amd64 and pacto_linux_arm64 assets.
+  PACTO_VERSION: 4.6.0
+  PACTO_SHA256_AMD64: f8ee7bb940d969b01d7bf3c4af35dc5727ec413a5b5f88fd61bb9df7926a282b
+  PACTO_SHA256_ARM64: cbf37ff9e9582c3f059225aaaa24e174f896c29e4db93cc23b248645bc119130
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      gate: ${{ steps.out.outputs.gate }}
+      exit-code: ${{ steps.out.outputs.exit-code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download pacto from this run
+        if: inputs.pacto-artifact != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.pacto-artifact }}
+          path: ${{ runner.temp }}/pacto-bin
+
+      - name: Use pacto from this run
+        if: inputs.pacto-artifact != ''
+        run: |
+          chmod +x "$RUNNER_TEMP/pacto-bin/pacto"
+          echo "$RUNNER_TEMP/pacto-bin" >> "$GITHUB_PATH"
+
+      - name: Install pacto
+        if: inputs.pacto-artifact == ''
+        env:
+          IN_VERSION: ${{ inputs.pacto-version }}
+        run: |
+          set -eu
+          case "$(uname -m)" in
+            x86_64|amd64) arch=amd64; sum=$PACTO_SHA256_AMD64 ;;
+            aarch64|arm64) arch=arm64; sum=$PACTO_SHA256_ARM64 ;;
+            *) echo "::error::pacto has no linux build for $(uname -m)"; exit 1 ;;
+          esac
+          releases=https://github.com/TrianaLab/pacto/releases
+          version=${IN_VERSION:-$PACTO_VERSION}
+          if [ "$version" = latest ]; then url=$releases/latest/download; else url=$releases/download/v${version#v}; fi
+          dir=$RUNNER_TEMP/pacto-bin
+          mkdir -p "$dir"
+          cd "$dir"
+          if [ -n "$IN_VERSION" ]; then
+            curl -fsSL -o checksums.txt "$url/checksums.txt"
+            sum=$(grep "  pacto_linux_$arch\$" checksums.txt | cut -d' ' -f1 || true)
+            if [ -z "$sum" ]; then echo "::error::pacto $version lists no checksum for pacto_linux_$arch"; exit 1; fi
+          fi
+          curl -fsSL -o pacto "$url/pacto_linux_$arch"
+          echo "$sum  pacto" | sha256sum -c -
+          chmod +x pacto
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Check pacto
+        run: |
+          if ! pacto ci --help >/dev/null 2>&1; then
+            echo "::error::pacto-actions v2 needs a Pacto release with pacto ci; set pacto-version"
+            exit 1
+          fi
+          pacto version
+
+      - name: pacto ci
+        id: run
+        env:
+          IN_PATH: ${{ inputs.path }}
+          IN_REGISTRY: ${{ inputs.registry }}
+          GH_TOKEN: ${{ github.token }}
+          PACTO_REGISTRY_USERNAME: ${{ secrets.registry-username }}
+          PACTO_REGISTRY_PASSWORD: ${{ secrets.registry-password }}
+        run: |
+          set +e
+          GITHUB_STEP_SUMMARY="$RUNNER_TEMP/plan.md" pacto ci "$IN_PATH" ${IN_REGISTRY:+--registry "$IN_REGISTRY"} --output-format json > "$RUNNER_TEMP/plan.json"
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: always()
+        run: |
+          [ -s "$RUNNER_TEMP/plan.json" ] && jq -r '"**pacto ci: \(.reason)**\n"' "$RUNNER_TEMP/plan.json" >> "$GITHUB_STEP_SUMMARY"
+          [ -f "$RUNNER_TEMP/plan.md" ] && cat "$RUNNER_TEMP/plan.md" >> "$GITHUB_STEP_SUMMARY"
+          true
+
+      # One annotation per service that did not read as unchanged, on its
+      # pacto.yaml: blocked is an error, unverified a warning and clear a
+      # notice. Every value is escaped, so a reason cannot start a workflow
+      # command. GitHub shows at most 10 annotations per level; the job
+      # summary holds every row.
+      - name: Annotate
+        id: annotate
+        if: always()
+        env:
+          IN_PATH: ${{ inputs.path }}
+        run: |
+          plan=$RUNNER_TEMP/plan.json
+          [ -s "$plan" ] || exit 0
+          jq -r --arg root "$IN_PATH" '
+            def data: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+            def prop: data | gsub(":"; "%3A") | gsub(","; "%2C");
+            .rows[] | select(.changed != "no")
+            | ({blocked: "error", unverified: "warning", clear: "notice"}[.impact.gate] // "warning") as $level
+            | ([($root | split("/")[]), (.dir | split("/")[]), "pacto.yaml"] | map(select(. != "" and . != ".")) | join("/")) as $file
+            | ([.impact.text, .reason] | map(select(. != null and . != "")) | join(": ")) as $message
+            | "::\($level) file=\($file | prop),line=1,title=\("pacto ci: \(.service // "")" | prop)::\($message | data)"
+          ' "$plan"
+
+      - name: Upload the plan JSON
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pacto-plan-json
+          path: ${{ runner.temp }}/plan.json
+
+      - name: Upload the plan Markdown
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pacto-plan-md
+          path: ${{ runner.temp }}/plan.md
+
+      - name: Outputs
+        id: out
+        if: always()
+        env:
+          CODE: ${{ steps.run.outputs.code }}
+        run: |
+          gate=$(jq -r '.gate // empty' "$RUNNER_TEMP/plan.json" 2>/dev/null || true)
+          echo "gate=$gate" >> "$GITHUB_OUTPUT"
+          echo "exit-code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Gate
+        env:
+          CODE: ${{ steps.run.outputs.code }}
+          FAIL_ON: ${{ inputs.fail-on }}
+        run: |
+          case "$FAIL_ON" in
+            blocked|unverified) ;;
+            *) echo "::error::fail-on is blocked or unverified, got $FAIL_ON"; exit 1 ;;
+          esac
+          case "$CODE" in
+            0) ;;
+            2)
+              if [ "$FAIL_ON" = unverified ]; then
+                echo "::error::pacto ci could not verify every service (exit 2)"
+                exit 1
+              fi
+              echo "::warning::pacto ci could not verify every service (exit 2); the annotations name them"
+              ;;
+            *) echo "::error::pacto ci exited $CODE"; exit 1 ;;
+          esac
+
+  publish:
+    if: inputs.publish && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    concurrency:
+      group: pacto-publish-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Download pacto from this run
+        if: inputs.pacto-artifact != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.pacto-artifact }}
+          path: ${{ runner.temp }}/pacto-bin
+
+      - name: Use pacto from this run
+        if: inputs.pacto-artifact != ''
+        run: |
+          chmod +x "$RUNNER_TEMP/pacto-bin/pacto"
+          echo "$RUNNER_TEMP/pacto-bin" >> "$GITHUB_PATH"
+
+      - name: Install pacto
+        if: inputs.pacto-artifact == ''
+        env:
+          IN_VERSION: ${{ inputs.pacto-version }}
+        run: |
+          set -eu
+          case "$(uname -m)" in
+            x86_64|amd64) arch=amd64; sum=$PACTO_SHA256_AMD64 ;;
+            aarch64|arm64) arch=arm64; sum=$PACTO_SHA256_ARM64 ;;
+            *) echo "::error::pacto has no linux build for $(uname -m)"; exit 1 ;;
+          esac
+          releases=https://github.com/TrianaLab/pacto/releases
+          version=${IN_VERSION:-$PACTO_VERSION}
+          if [ "$version" = latest ]; then url=$releases/latest/download; else url=$releases/download/v${version#v}; fi
+          dir=$RUNNER_TEMP/pacto-bin
+          mkdir -p "$dir"
+          cd "$dir"
+          if [ -n "$IN_VERSION" ]; then
+            curl -fsSL -o checksums.txt "$url/checksums.txt"
+            sum=$(grep "  pacto_linux_$arch\$" checksums.txt | cut -d' ' -f1 || true)
+            if [ -z "$sum" ]; then echo "::error::pacto $version lists no checksum for pacto_linux_$arch"; exit 1; fi
+          fi
+          curl -fsSL -o pacto "$url/pacto_linux_$arch"
+          echo "$sum  pacto" | sha256sum -c -
+          chmod +x pacto
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Check pacto
+        run: |
+          if ! pacto ci --help >/dev/null 2>&1; then
+            echo "::error::pacto-actions v2 needs a Pacto release with pacto ci; set pacto-version"
+            exit 1
+          fi
+          pacto version
+
+      - name: pacto ci --publish
+        env:
+          IN_PATH: ${{ inputs.path }}
+          IN_REGISTRY: ${{ inputs.registry }}
+          IN_TLOG: ${{ inputs.transparency-log }}
+          GH_TOKEN: ${{ github.token }}
+          PACTO_REGISTRY_USERNAME: ${{ secrets.registry-username }}
+          PACTO_REGISTRY_PASSWORD: ${{ secrets.registry-password }}
+          SIGN_KEY: ${{ secrets.sign-key }}
+          COSIGN_PASSWORD: ${{ secrets.sign-key-password }}
+        run: |
+          key=$RUNNER_TEMP/cosign.key
+          trap 'rm -f "$key"' EXIT
+          set --
+          if [ -n "$SIGN_KEY" ]; then
+            (umask 077 && printf '%s\n' "$SIGN_KEY" > "$key")
+            set -- --sign-key "$key"
+            if [ "$IN_TLOG" = false ]; then set -- "$@" --no-transparency-log; fi
+          fi
+          unset SIGN_KEY
+          pacto ci --publish "$IN_PATH" ${IN_REGISTRY:+--registry "$IN_REGISTRY"} "$@"
+
+  comment:
+    needs: plan
+    if: always() && inputs.comment && needs.plan.result != 'skipped' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pacto-plan-md
+          path: ${{ runner.temp }}/plan
+
+      - name: Build the comment
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo '<!-- pacto-ci -->'
+            head -c 65000 "$RUNNER_TEMP/plan/plan.md"
+            printf '\n\n[The full plan is in the workflow run](%s)\n' "$RUN_URL"
+          } > "$RUNNER_TEMP/body.md"
+
+      # Only a comment github-actions[bot] posted with the marker is updated,
+      # so a marker someone else posted is never patched.
+      - name: Find the plan comment
+        id: lookup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          FILTER: '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- pacto-ci -->"))) | .id'
+        run: |
+          gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "$FILTER" > "$RUNNER_TEMP/ids"
+          echo "id=$(head -n1 "$RUNNER_TEMP/ids")" >> "$GITHUB_OUTPUT"
+
+      - name: Post or update the plan comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ID: ${{ steps.lookup.outputs.id }}
+        run: |
+          if [ -n "$ID" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$ID" -F "body=@$RUNNER_TEMP/body.md" > /dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/body.md" > /dev/null
+          fi

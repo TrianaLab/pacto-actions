@@ -1,5 +1,5 @@
 name: 'Pacto CLI'
-description: 'Setup, diff, push, and generate documentation for Pacto contracts in your GitHub Actions workflows'
+description: 'Plan and publish Pacto contracts with pacto ci, check impact, validate, diff and document them in your GitHub Actions workflows'
 author: 'TrianaLab'
 
 branding:
@@ -8,13 +8,13 @@ branding:
 
 inputs:
   command:
-    description: 'Command to run: "setup", "validate", "diff", "push", or "doc"'
+    description: 'Command to run: "setup", "ci", "publish", "impact", "validate", "diff", or "doc"'
     required: true
   # setup inputs
   version:
-    description: '[setup] Pacto version to install (e.g., v0.2.1)'
+    description: '[setup] Pacto version to install (e.g., 4.6.0). Empty installs the version this release pins and checks by sha256; "latest" installs the newest release unpinned'
     required: false
-    default: 'latest'
+    default: ''
   github-token:
     description: 'GitHub token passed as GH_TOKEN to all commands'
     required: false
@@ -24,44 +24,39 @@ inputs:
     description: 'Enable OCI bundle caching across workflow runs (uses ~/.cache/pacto/oci/)'
     required: false
     default: 'true'
-  # diff inputs
+  # ci and publish inputs
+  registry:
+    description: '[ci/publish] Registry the services publish to (e.g., ghcr.io/acme). Empty lets pacto ci resolve it from the CI platform'
+    required: false
+  fail-on:
+    description: '[ci] Which plan fails the step: "blocked" (exit 1) or "unverified" (exit 1 or 2)'
+    required: false
+    default: 'blocked'
+  # diff and impact inputs
   old:
-    description: '[diff] Baseline contract: directory path or oci:// reference'
+    description: '[diff/impact] Baseline contract: directory path or oci:// reference'
     required: false
   new:
-    description: '[diff] Updated contract: directory path or oci:// reference'
+    description: '[diff/impact] Updated contract: directory path or oci:// reference'
     required: false
   output-format:
-    description: '[diff] Output format: "text", "json", or "markdown"'
+    description: '[diff/impact] Output format: "text", "json", or "markdown"'
     required: false
     default: 'text'
   fail-on-breaking:
     description: '[diff] Fail the action if breaking changes are detected'
     required: false
     default: 'true'
-  # push inputs
-  ref:
-    description: '[push] OCI reference (e.g., oci://ghcr.io/org/name:tag)'
-    required: false
   path:
-    description: '[validate/push/doc] Path to the contract directory or oci:// reference'
+    description: '[ci/publish/validate/doc] Root that pacto ci walks, or the contract directory or oci:// reference'
     required: false
     default: '.'
-  registry:
-    description: '[push] Registry hostname for authentication (e.g., ghcr.io)'
-    required: false
-  username:
-    description: '[push] Registry username for authentication'
-    required: false
-  password:
-    description: '[push] Registry password or token for authentication'
-    required: false
-  # override inputs (all commands except setup)
+  # override inputs
   values:
-    description: '[validate/diff/doc/push] Values file(s) to merge into the contract (newline-separated, last wins)'
+    description: '[validate/diff/doc] Values file(s) to merge into the contract (newline-separated, last wins)'
     required: false
   set:
-    description: '[validate/diff/doc/push] Set contract values inline (newline-separated, e.g. service.version=2.0.0)'
+    description: '[validate/diff/doc] Set contract values inline (newline-separated, e.g. service.version=2.0.0)'
     required: false
   # diff-specific override inputs
   old-values:
@@ -93,6 +88,15 @@ outputs:
   version:
     description: '[setup] The exact version of Pacto that was installed'
     value: ${{ steps.setup.outputs.version }}
+  gate:
+    description: '[ci] Gate of the plan: "clear", "blocked", or "unverified"'
+    value: ${{ steps.ci.outputs.gate }}
+  exit-code:
+    description: '[ci] Exit code of pacto ci: 0 clear, 1 blocked, 2 unverified'
+    value: ${{ steps.ci.outputs.exit-code }}
+  impact-output:
+    description: '[impact] The full impact output'
+    value: ${{ steps.impact.outputs.impact-output }}
   has-breaking-changes:
     description: '[diff] Whether breaking changes were detected ("true" or "false")'
     value: ${{ steps.diff.outputs.has-breaking-changes }}
@@ -112,9 +116,9 @@ runs:
         COMMAND: ${{ inputs.command }}
       run: |
         case "${COMMAND}" in
-          setup|validate|diff|push|doc) ;;
+          setup|ci|publish|impact|validate|diff|doc) ;;
           *)
-            echo "::error::Invalid command '${COMMAND}'. Must be one of: setup, validate, diff, push, doc"
+            echo "::error::Invalid command '${COMMAND}'. Must be one of: setup, ci, publish, impact, validate, diff, doc"
             exit 1
             ;;
         esac
@@ -127,42 +131,150 @@ runs:
         echo "PACTO_NO_UPDATE_CHECK=1" >> "${GITHUB_ENV}"
 
     # ── Setup ──────────────────────────────────────────────
+    # Installs the Pacto release this release of pacto-actions pins, checked
+    # against the sha256 below (the same values as .github/workflows/ci.yml).
+    # Any other version, and any OS but linux, is checked against the
+    # checksums.txt of its own release. A missing checksum fails the step.
     - name: Install Pacto
       if: inputs.command == 'setup'
       id: setup
       shell: bash
       env:
-        VERSION: ${{ inputs.version }}
-        GH_TOKEN: ${{ inputs.github-token }}
+        IN_VERSION: ${{ inputs.version }}
+        PACTO_VERSION: 4.6.0
+        PACTO_SHA256_AMD64: f8ee7bb940d969b01d7bf3c4af35dc5727ec413a5b5f88fd61bb9df7926a282b
+        PACTO_SHA256_ARM64: cbf37ff9e9582c3f059225aaaa24e174f896c29e4db93cc23b248645bc119130
       run: |
         set -euo pipefail
-
-        # Build install script arguments
-        ARGS="--no-sudo"
-        if [ "${VERSION}" != "latest" ]; then
-          ARGS="${ARGS} --version ${VERSION}"
+        os=$(uname | tr '[:upper:]' '[:lower:]')
+        case "$(uname -m)" in
+          x86_64|amd64) arch=amd64; sum=$PACTO_SHA256_AMD64 ;;
+          aarch64|arm64) arch=arm64; sum=$PACTO_SHA256_ARM64 ;;
+          *) echo "::error::pacto has no build for $(uname -m)"; exit 1 ;;
+        esac
+        releases=https://github.com/TrianaLab/pacto/releases
+        version=${IN_VERSION:-$PACTO_VERSION}
+        if [ "$version" = latest ]; then url=$releases/latest/download; else url=$releases/download/v${version#v}; fi
+        dir=$RUNNER_TEMP/pacto-bin
+        mkdir -p "$dir"
+        cd "$dir"
+        if [ -n "$IN_VERSION" ] || [ "$os" != linux ]; then
+          curl -fsSL -o checksums.txt "$url/checksums.txt"
+          sum=$(grep "  pacto_${os}_${arch}\$" checksums.txt | cut -d' ' -f1 || true)
+          if [ -z "$sum" ]; then echo "::error::pacto $version lists no checksum for pacto_${os}_${arch}"; exit 1; fi
         fi
+        curl -fsSL -o pacto "$url/pacto_${os}_${arch}"
+        if command -v sha256sum >/dev/null; then
+          echo "$sum  pacto" | sha256sum -c -
+        else
+          echo "$sum  pacto" | shasum -a 256 -c -
+        fi
+        chmod +x pacto
+        echo "$dir" >> "$GITHUB_PATH"
 
-        # Install using the official install script
-        curl -fsSL https://raw.githubusercontent.com/TrianaLab/pacto/main/scripts/get-pacto.sh | bash -s -- ${ARGS}
-
-        # Capture installed version — take only the FIRST semver match. `pacto
-        # version` is multiline (and any stray notice can add more matches); a
-        # multiline value breaks GITHUB_OUTPUT with "Invalid format".
-        INSTALLED_VERSION=$(pacto version 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)
-        [ -n "${INSTALLED_VERSION}" ] || INSTALLED_VERSION="${VERSION}"
+        # Capture installed version: the first semver match only, since a
+        # multiline value breaks GITHUB_OUTPUT.
+        INSTALLED_VERSION=$(./pacto version 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)
+        [ -n "${INSTALLED_VERSION}" ] || INSTALLED_VERSION="${version}"
         echo "version=${INSTALLED_VERSION}" >> "${GITHUB_OUTPUT}"
-        echo "Pacto ${INSTALLED_VERSION} installed successfully"
+        echo "Pacto ${INSTALLED_VERSION} installed"
 
     # ── Cache ──────────────────────────────────────────────
     - name: Restore OCI bundle cache
       if: inputs.command != 'setup' && inputs.cache == 'true'
-      uses: actions/cache@v6.1.0
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/pacto/oci/
         key: pacto-oci-${{ runner.os }}-${{ github.run_id }}
         restore-keys: |
           pacto-oci-${{ runner.os }}-
+
+    # ── CI ─────────────────────────────────────────────────
+    # pacto ci plans every service under path. The step keeps pacto ci's exit
+    # code (0 clear, 1 blocked, 2 unverified) as an output and fails per
+    # fail-on in a separate step, so the outputs are set whatever the plan.
+    - name: Run pacto ci
+      if: inputs.command == 'ci'
+      id: ci
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        IN_PATH: ${{ inputs.path }}
+        IN_REGISTRY: ${{ inputs.registry }}
+        PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
+      run: |
+        plan=$RUNNER_TEMP/pacto-plan.json
+        set +e
+        pacto ci "$IN_PATH" ${IN_REGISTRY:+--registry "$IN_REGISTRY"} --output-format json > "$plan"
+        code=$?
+        set -e
+        gate=$(jq -r '.gate // empty' "$plan" 2>/dev/null || true)
+        echo "gate=$gate" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Gate on the plan
+      if: inputs.command == 'ci'
+      shell: bash
+      env:
+        CODE: ${{ steps.ci.outputs.exit-code }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        case "$FAIL_ON" in
+          blocked|unverified) ;;
+          *) echo "::error::fail-on is blocked or unverified, got $FAIL_ON"; exit 1 ;;
+        esac
+        case "$CODE" in
+          0) ;;
+          2)
+            if [ "$FAIL_ON" = unverified ]; then
+              echo "::error::pacto ci could not verify every service (exit 2)"
+              exit 1
+            fi
+            echo "::warning::pacto ci could not verify every service (exit 2); the job summary names them"
+            ;;
+          *) echo "::error::pacto ci exited $CODE"; exit 1 ;;
+        esac
+
+    # ── Publish ────────────────────────────────────────────
+    # pacto ci --publish publishes every changed service on the merged commit.
+    # Keyless signing needs id-token: write on the job that runs this step.
+    - name: Run pacto ci --publish
+      if: inputs.command == 'publish'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        IN_PATH: ${{ inputs.path }}
+        IN_REGISTRY: ${{ inputs.registry }}
+        PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
+      run: pacto ci --publish "$IN_PATH" ${IN_REGISTRY:+--registry "$IN_REGISTRY"}
+
+    # ── Impact ─────────────────────────────────────────────
+    - name: Run pacto impact
+      if: inputs.command == 'impact'
+      id: impact
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        IN_OLD: ${{ inputs.old }}
+        IN_NEW: ${{ inputs.new }}
+        IN_FORMAT: ${{ inputs.output-format }}
+        PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
+      run: |
+        if [ -z "$IN_OLD" ] || [ -z "$IN_NEW" ]; then
+          echo "::error::Both 'old' and 'new' inputs are required for the impact command"
+          exit 1
+        fi
+        set +e
+        OUTPUT=$(pacto impact "$IN_OLD" "$IN_NEW" --output-format "$IN_FORMAT")
+        code=$?
+        set -e
+        {
+          echo "impact-output<<PACTO_IMPACT_EOF"
+          echo "$OUTPUT"
+          echo "PACTO_IMPACT_EOF"
+        } >> "$GITHUB_OUTPUT"
+        echo "$OUTPUT"
+        exit "$code"
 
     # ── Validate ───────────────────────────────────────────
     - name: Validate contract
@@ -403,70 +515,6 @@ runs:
         fi
 
         rm -f "${BODY_FILE}"
-
-    # ── Push ───────────────────────────────────────────────
-    - name: Validate push inputs
-      if: inputs.command == 'push'
-      shell: bash
-      env:
-        REF: ${{ inputs.ref }}
-        REGISTRY: ${{ inputs.registry }}
-        USERNAME: ${{ inputs.username }}
-        PASSWORD: ${{ inputs.password }}
-      run: |
-        if [ -z "${REF}" ]; then
-          echo "::error::The 'ref' input is required for the push command"
-          exit 1
-        fi
-
-        # Validate that auth inputs are either all provided or all omitted
-        AUTH_COUNT=0
-        [ -n "${REGISTRY}" ] && AUTH_COUNT=$((AUTH_COUNT + 1))
-        [ -n "${USERNAME}" ] && AUTH_COUNT=$((AUTH_COUNT + 1))
-        [ -n "${PASSWORD}" ] && AUTH_COUNT=$((AUTH_COUNT + 1))
-        if [ "${AUTH_COUNT}" -ne 0 ] && [ "${AUTH_COUNT}" -ne 3 ]; then
-          echo "::error::All three inputs (registry, username, password) must be provided together for authentication"
-          exit 1
-        fi
-
-    - name: Authenticate with registry
-      if: inputs.command == 'push' && inputs.registry != '' && inputs.username != '' && inputs.password != ''
-      shell: bash
-      env:
-        REGISTRY: ${{ inputs.registry }}
-        USERNAME: ${{ inputs.username }}
-        PASSWORD: ${{ inputs.password }}
-      run: |
-        set -euo pipefail
-        echo "::add-mask::${PASSWORD}"
-        pacto login "${REGISTRY}" -u "${USERNAME}" -p "${PASSWORD}"
-
-    - name: Push contract
-      if: inputs.command == 'push'
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        REF: ${{ inputs.ref }}
-        CONTRACT_PATH: ${{ inputs.path }}
-        PACTO_NO_CACHE: ${{ inputs.cache == 'true' && '0' || '1' }}
-        VALUES: ${{ inputs.values }}
-        SET: ${{ inputs.set }}
-      run: |
-        set -euo pipefail
-        ARGS=()
-        if [ -n "${VALUES}" ]; then
-          while IFS= read -r line; do
-            [ -n "${line}" ] && ARGS+=(--values "${line}")
-          done <<< "${VALUES}"
-        fi
-        if [ -n "${SET}" ]; then
-          while IFS= read -r line; do
-            [ -n "${line}" ] && ARGS+=(--set "${line}")
-          done <<< "${SET}"
-        fi
-        echo "Pushing contract to ${REF}..."
-        pacto push "${REF}" -p "${CONTRACT_PATH}" ${ARGS[@]+"${ARGS[@]}"}
-        echo "Contract pushed successfully to ${REF}"
 
     # ── Doc ────────────────────────────────────────────────
     - name: Generate documentation
