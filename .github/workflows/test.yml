@@ -193,3 +193,72 @@ jobs:
           chmod +x "$RUNNER_TEMP/pacto-bin/pacto"
           export PATH="$RUNNER_TEMP/pacto-bin:$PATH"
           test/check-real-annotations.sh
+
+  # Runs the GitLab component's own pacto-plan lines inside its default image,
+  # with the pacto under test on PATH, and compares the exit code with a
+  # direct pacto ci run on each fixture.
+  gitlab-script:
+    needs: build-pacto
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      registry:
+        image: registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+        ports:
+          - 5000:5000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pacto-bin
+          path: ${{ runner.temp }}/pacto-bin
+      - name: The component's lines exit like pacto ci
+        run: |
+          chmod +x "$RUNNER_TEMP/pacto-bin/pacto"
+          PACTO_BIN="$RUNNER_TEMP/pacto-bin" test/check-gitlab-script.sh
+
+  installer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The component installs the pinned pacto and rejects a corrupted hash
+        run: test/check-installer.sh
+
+  composite:
+    needs: build-pacto
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pacto-bin
+          path: ${{ runner.temp }}/pacto-bin
+      - name: Use pacto from this run
+        run: |
+          chmod +x "$RUNNER_TEMP/pacto-bin/pacto"
+          echo "$RUNNER_TEMP/pacto-bin" >> "$GITHUB_PATH"
+      - name: Plan the collision fixture
+        id: ci
+        continue-on-error: true
+        uses: ./
+        with:
+          command: ci
+          path: test/fixtures/collision
+      - name: The ci command reports exit 1 and fails the step
+        env:
+          CODE: ${{ steps.ci.outputs.exit-code }}
+          GATE: ${{ steps.ci.outputs.gate }}
+          OUTCOME: ${{ steps.ci.outcome }}
+        run: |
+          if [ "$CODE" != 1 ] || [ "$GATE" != blocked ] || [ "$OUTCOME" != failure ]; then
+            echo "::error::exit-code=$CODE gate=$GATE outcome=$OUTCOME, want 1, blocked and failure"
+            exit 1
+          fi
