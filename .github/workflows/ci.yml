@@ -75,9 +75,9 @@ on:
 env:
   # The Pacto release this release of pacto-actions was tested with, and the
   # sha256 of its pacto_linux_amd64 and pacto_linux_arm64 assets.
-  PACTO_VERSION: 4.5.0
-  PACTO_SHA256_AMD64: 4972e3235ebd9f0228567d46f5360d50737cc1b8aa3eb4f3468367e2d95fce83
-  PACTO_SHA256_ARM64: 0eec7c3c8b020bb099331734cbd4f5b33a559738bae4d4a36acad15714a53562
+  PACTO_VERSION: 4.6.0
+  PACTO_SHA256_AMD64: f8ee7bb940d969b01d7bf3c4af35dc5727ec413a5b5f88fd61bb9df7926a282b
+  PACTO_SHA256_ARM64: cbf37ff9e9582c3f059225aaaa24e174f896c29e4db93cc23b248645bc119130
 
 defaults:
   run:
